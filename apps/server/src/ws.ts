@@ -69,6 +69,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
+import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import {
@@ -462,6 +463,7 @@ const makeWsRpcLayer = (
       };
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
+      const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -1123,6 +1125,7 @@ const makeWsRpcLayer = (
         const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
           externalLauncher.resolveAvailableEditors(),
         );
+        const publishedThemes = yield* environmentTheme.current;
         const fileManagerRevealKind = availableEditors.includes("file-manager")
           ? yield* resolveFileManagerRevealKindForConfig(
               externalLauncher.resolveFileManagerRevealKind(),
@@ -1163,6 +1166,7 @@ const makeWsRpcLayer = (
               }),
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
+          environmentThemes: publishedThemes.length > 0 ? publishedThemes : undefined,
         };
       });
 
@@ -2357,6 +2361,13 @@ const makeWsRpcLayer = (
                 })),
                 Stream.debounce(Duration.millis(PROVIDER_STATUS_DEBOUNCE_MS)),
               );
+              const environmentThemeUpdates = environmentTheme.streamChanges.pipe(
+                Stream.map((themes) => ({
+                  version: 1 as const,
+                  type: "environmentThemesUpdated" as const,
+                  payload: { themes },
+                })),
+              );
               const settingsUpdates = serverSettings.streamChanges.pipe(
                 Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
                 Stream.map((settings) => ({
@@ -2372,7 +2383,10 @@ const makeWsRpcLayer = (
 
               const liveUpdates = Stream.merge(
                 keybindingsUpdates,
-                Stream.merge(providerStatuses, settingsUpdates),
+                Stream.merge(
+                  providerStatuses,
+                  Stream.merge(settingsUpdates, environmentThemeUpdates),
+                ),
               );
 
               return Stream.concat(

@@ -307,6 +307,15 @@ export function applyServerConfigProjection(
         latestEvent: event,
         source: "live",
       }));
+    case "environmentThemesUpdated":
+      return Option.map(current, (projection) => ({
+        config: {
+          ...projection.config,
+          environmentThemes: event.payload.themes.length > 0 ? event.payload.themes : undefined,
+        },
+        latestEvent: event,
+        source: "live",
+      }));
   }
 }
 

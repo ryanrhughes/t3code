@@ -72,6 +72,14 @@ const RESERVED_THEME_IDS = new Set([
   "t3-iris",
 ]);
 
+/**
+ * The environment's palettes are not saved: they are republished by the
+ * server on every change and would go stale the moment the machine's theme
+ * moved on. They ride the custom-theme listeners so every theme consumer
+ * already re-reads when they change.
+ */
+let environmentThemeDefinitions: ReadonlyArray<ThemeDefinition> = [];
+
 const customThemeListeners = new Set<() => void>();
 type CustomThemeLibrarySnapshot =
   | Readonly<{
@@ -242,6 +250,16 @@ export function invalidateCustomThemes() {
 export function getCustomThemes(): ReadonlyArray<ThemeDefinition> {
   const snapshot = getCustomThemeLibrarySnapshot();
   return snapshot.status === "ready" ? snapshot.themes : [];
+}
+
+export function getEnvironmentThemes(): ReadonlyArray<ThemeDefinition> {
+  return environmentThemeDefinitions;
+}
+
+export function setEnvironmentThemes(themes: ReadonlyArray<ThemeDefinition>): void {
+  if (environmentThemeDefinitions === themes) return;
+  environmentThemeDefinitions = themes;
+  notifyCustomThemeListeners();
 }
 
 export function getStoredCustomThemeCollection(
@@ -1424,6 +1442,9 @@ export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | nu
   return (
     BUILT_IN_THEME_DEFINITIONS.find((definition) => definition.id === themeId) ??
     getCustomThemes().find((definition) => definition.id === themeId) ??
+    // Resolved last so a theme the user saved always wins over one the
+    // machine happens to publish under the same id.
+    environmentThemeDefinitions.find((definition) => definition.id === themeId) ??
     null
   );
 }
