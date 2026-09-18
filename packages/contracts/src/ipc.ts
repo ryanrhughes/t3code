@@ -1211,7 +1211,30 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
+export const DesktopGamingOverlayStateSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  shortcutLabel: Schema.NullOr(Schema.String),
+  badgeError: Schema.optional(Schema.String),
+});
+export const DesktopGamingBadgeSchema = Schema.Struct({
+  attention: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  unread: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  working: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  offline: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  corner: Schema.Literals(["top-left", "top-right", "bottom-left", "bottom-right"]),
+  pulse: Schema.Boolean,
+});
+export type DesktopGamingBadge = typeof DesktopGamingBadgeSchema.Type;
+export type DesktopGamingOverlayState = typeof DesktopGamingOverlayStateSchema.Type;
+
 export interface DesktopBridge {
+  /** Optional for older shells; gaming mode uses the existing paired environments. */
+  gamingOverlay?: (
+    action: "get" | "enter" | "exit" | "hide" | "show",
+  ) => Promise<DesktopGamingOverlayState>;
+  onGamingOverlayState?: (listener: (state: DesktopGamingOverlayState) => void) => () => void;
+  setGamingBadge?: (status: DesktopGamingBadge) => Promise<void>;
+  onGamingOverlayActivate?: (listener: () => void) => () => void;
   getAppBranding: () => DesktopAppBranding | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;

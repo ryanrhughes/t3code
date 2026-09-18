@@ -1,5 +1,8 @@
 mod capture;
 mod feedback;
+mod gaming_badge;
+#[cfg(test)]
+mod gaming_badge_tests;
 mod ipc;
 mod protocols;
 #[cfg(test)]
@@ -15,8 +18,12 @@ fn emit(value: serde_json::Value) -> Result<()> {
 }
 
 fn run() -> Result<()> {
-    ipc::session_directory()?;
     let args: Vec<String> = std::env::args().collect();
+    // The badge only needs a Wayland layer surface, never the capture permissions or sockets.
+    if args.get(1).map(String::as_str) == Some("gaming-badge") && args.len() == 2 {
+        return gaming_badge::run();
+    }
+    ipc::session_directory()?;
     match args.get(1).map(String::as_str) {
         Some("check") => emit(serde_json::json!({"feedbackAvailable": capture::check()?})),
         Some("capture") if args.len() == 3 => {
@@ -36,7 +43,7 @@ fn run() -> Result<()> {
         Some("feedback") if args.len() == 4 => {
             feedback::run(Path::new(&args[2]), serde_json::from_str(&args[3])?)
         }
-        _ => Err("Expected check, capture <directory>, activate <pid> <title>, or feedback <directory> <options>".into()),
+        _ => Err("Expected check, capture <directory>, activate <pid> <title>, feedback <directory> <options>, or gaming-badge".into()),
     }
 }
 

@@ -113,3 +113,9 @@ export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
 export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
 
 export const CHECK_SYSTEM_PERMISSION_CHANNEL = "desktop:check-system-permission";
+
+export const GAMING_OVERLAY_CHANNEL = "desktop:gaming-overlay";
+export const GAMING_OVERLAY_STATE_CHANNEL = "desktop:gaming-overlay-state";
+
+export const GAMING_BADGE_CHANNEL = "desktop:gaming-badge";
+export const GAMING_OVERLAY_ACTIVATE_CHANNEL = "desktop:gaming-overlay-activate";

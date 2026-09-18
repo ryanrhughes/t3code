@@ -241,6 +241,13 @@ export const make = Effect.gen(function* () {
           { label: "Zoom Out", accelerator: "CmdOrCtrl+-", click: zoomClick("out") },
           { type: "separator" },
           { role: "togglefullscreen" },
+          { type: "separator" },
+          {
+            label: "Toggle Gaming Mode",
+            accelerator: "CmdOrCtrl+Shift+G",
+            click: () =>
+              runMenuEffect("toggle-gaming-overlay", dispatchMenuAction("toggle-gaming-overlay")),
+          },
         ],
       },
       { role: "windowMenu" },

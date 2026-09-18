@@ -1,3 +1,4 @@
+import { gamingOverlayAction } from "../../gamingOverlay";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
 import { ArchiveIcon, ArchiveX, ChevronRightIcon, SettingsIcon } from "lucide-react";
@@ -2164,6 +2165,19 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      {window.desktopBridge?.gamingOverlay && (
+        <SettingsSection id="gaming-mode" title="Gaming mode">
+          <SettingsRow
+            title="Agent whispers"
+            description="Keep your environments and agent conversations in a compact overlay while you play. Linux supports Hyprland and X11."
+            control={
+              <Button variant="outline" size="sm" onClick={() => void gamingOverlayAction("enter")}>
+                Enter gaming mode
+              </Button>
+            }
+          />
+        </SettingsSection>
+      )}
       <ProjectDefaultsSettings category="general" />
       <SettingsSection id="organization" title="Organization">
         <SettingsRow

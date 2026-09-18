@@ -49,6 +49,21 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  setGamingBadge: (status) => ipcRenderer.invoke(IpcChannels.GAMING_BADGE_CHANNEL, status),
+  onGamingOverlayActivate: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on(IpcChannels.GAMING_OVERLAY_ACTIVATE_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(IpcChannels.GAMING_OVERLAY_ACTIVATE_CHANNEL, handler);
+  },
+  gamingOverlay: (action) => ipcRenderer.invoke(IpcChannels.GAMING_OVERLAY_CHANNEL, action),
+  onGamingOverlayState: (listener) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      state: import("@t3tools/contracts").DesktopGamingOverlayState,
+    ) => listener(state);
+    ipcRenderer.on(IpcChannels.GAMING_OVERLAY_STATE_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(IpcChannels.GAMING_OVERLAY_STATE_CHANNEL, handler);
+  },
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

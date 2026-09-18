@@ -1,5 +1,7 @@
 "use client";
 
+import { toggleGamingOverlay } from "../gamingOverlay";
+
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
@@ -1818,6 +1820,18 @@ function OpenCommandPaletteDialog(props: {
       });
     },
   });
+
+  if (window.desktopBridge?.gamingOverlay) {
+    actionItems.push({
+      kind: "action",
+      value: "action:gaming-overlay",
+      searchTerms: ["gaming", "wow", "overlay", "game", "whispers"],
+      title: "Toggle gaming mode",
+      description: "Chat with agents alongside your game",
+      icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+      run: toggleGamingOverlay,
+    });
+  }
 
   actionItems.push({
     kind: "action",

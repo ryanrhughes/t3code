@@ -30,6 +30,8 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 
+import { gamingOverlays } from "./GamingOverlay.ts";
+
 const TITLEBAR_HEIGHT = 40;
 const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linux
 const TITLEBAR_LIGHT_SYMBOL_COLOR = "#1f2937";
@@ -407,7 +409,7 @@ export const make = Effect.gen(function* () {
     let pendingBoundsPersistFiber: Fiber.Fiber<void, never> | undefined;
     let boundsPersistenceEnabled = persistedBounds === null || restoredPersistedBounds;
     const readPersistableBounds = (): DesktopAppSettings.DesktopWindowBounds | null => {
-      if (window.isDestroyed()) {
+      if (window.isDestroyed() || gamingOverlays.get(window)?.ownsWindowBounds) {
         return null;
       }
       const bounds =
@@ -963,9 +965,18 @@ export const make = Effect.gen(function* () {
     handleBackendNotReady: Ref.set(backendReadyRef, false).pipe(
       Effect.withSpan("desktop.window.handleBackendNotReady"),
     ),
-    flushMainWindowBounds: Effect.suspend(() => flushMainWindowBounds).pipe(
-      Effect.withSpan("desktop.window.flushMainWindowBounds"),
-    ),
+    flushMainWindowBounds: Effect.gen(function* () {
+      const window = yield* currentMainWindow;
+      const overlay = Option.isSome(window) ? gamingOverlays.get(window.value) : undefined;
+      if (overlay) {
+        yield* Effect.tryPromise(() => overlay.action("exit")).pipe(
+          Effect.catch((error) =>
+            logWindowWarning("could not restore gaming overlay before shutdown", { error }),
+          ),
+        );
+      }
+      yield* flushMainWindowBounds;
+    }).pipe(Effect.withSpan("desktop.window.flushMainWindowBounds")),
     dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action, options) {
       yield* Effect.annotateCurrentSpan({ action });
       yield* dispatchRendererEvent(MENU_ACTION_CHANNEL, action, options);

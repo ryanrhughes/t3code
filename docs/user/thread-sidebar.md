@@ -125,3 +125,32 @@ On web and desktop, use **Agents** to follow work delegated to subagents.
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
+
+## Chat while gaming
+
+In the desktop app, open **Settings → General → Gaming mode**, or choose
+**Toggle gaming mode** from the command palette or **View** menu. Gaming mode
+turns the current window into a compact chat panel using your existing paired
+environments. Search across threads, filter to an environment, or choose
+**Needs you** to find approvals, questions, and plans waiting for your response.
+The conversation keeps the usual messaging, approval, and stop controls.
+
+A small **T3 badge** stays visible when chat is hidden. Click it to open your
+agents. Gold means an agent needs you (including errors); green means an unread
+reply; blue means work is running. New alerts flash briefly, then stay marked
+until you read the reply or resolve the request. Opening the agent list does
+not clear unread replies. Disconnected environments are labeled offline.
+Choose **Badge position** in the agent list to move it to another corner.
+The badge appears on the monitor where you enter gaming mode.
+
+On Linux, gaming mode supports Hyprland and X11. Hyprland places the panel on a
+temporary special workspace. The shortcut shown in the panel opens and hides
+it over your game; it defaults to `Ctrl+Shift+Space`, choosing an unused
+alternative if that is already assigned. Press `Escape` from the conversation
+to hide it. **Exit gaming mode** restores the normal T3 window. Your saved
+Hyprland configuration is not changed. After a Hyprland configuration reload,
+exit and re-enter gaming mode to restore its temporary shortcut.
+
+Use windowed or borderless mode if your game covers the overlay on X11.
+Gaming mode runs alongside the game and works independently of its addon API,
+so it does not require a WoW addon or a particular WoW version.
