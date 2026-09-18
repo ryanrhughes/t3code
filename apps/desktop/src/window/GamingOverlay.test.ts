@@ -53,6 +53,25 @@ function setup() {
 }
 
 describe("gaming overlay window lifecycle", () => {
+  it("closes only the compact chat and keeps the badge available to reopen it", async () => {
+    const { overlay, window, restore } = setup();
+    const event = { preventDefault: vi.fn() };
+    await overlay.action("enter");
+    const closing = overlay.close(event);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    await closing;
+    expect(window.isVisible()).toBe(false);
+    expect(overlay.state.enabled).toBe(true);
+    expect(restore).not.toHaveBeenCalled();
+    await overlay.action("show");
+    expect(window.isVisible()).toBe(true);
+    await overlay.action("exit");
+    event.preventDefault.mockClear();
+    await overlay.close(event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(restore).toHaveBeenCalledOnce();
+  });
+
   it("hides without losing the mode and restores the original window on exit", async () => {
     const { overlay, window, restore, original } = setup();
     expect((await overlay.action("enter")).enabled).toBe(true);

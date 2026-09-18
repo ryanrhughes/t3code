@@ -313,14 +313,14 @@ fn badge_maps_above_fullscreen_without_keyboard_focus_updates_and_exits_on_paren
         (layer::Anchor::Top | layer::Anchor::Right).bits()
     );
     assert!(initial.1 > 0 && initial.1 < 56 * 56);
-    assert_eq!(initial.2, 0xffb59a63);
+    assert_eq!(initial.2, 0xff3a4048);
     commands.write_all(b"{\"command\":\"update\",\"status\":{\"attention\":1,\"unread\":2,\"working\":0,\"offline\":0,\"corner\":\"bottom-left\",\"pulse\":false}}\n").unwrap();
     let updated = rx.recv_timeout(Duration::from_secs(3)).unwrap();
     assert_eq!(
         updated.0,
         (layer::Anchor::Bottom | layer::Anchor::Left).bits()
     );
-    assert_eq!(updated.2, 0xffedc46c);
+    assert_eq!(updated.2, 0xffe9b949);
     drop(commands);
     badge.join().unwrap().unwrap();
     stop.write_all(&[1]).unwrap();

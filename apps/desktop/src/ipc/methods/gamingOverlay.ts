@@ -9,7 +9,8 @@ import { startNativeGamingBadge } from "../../window/NativeGamingBadge.ts";
 import { startElectronGamingBadge } from "../../window/ElectronGamingBadge.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import { GamingOverlay, gamingOverlays } from "../../window/GamingOverlay.ts";
-import { enterHyprlandGamingOverlay } from "../../window/HyprlandGamingOverlay.ts";
+import { startHyprlandBadgeClicks } from "../../window/HyprlandBadgeClicks.ts";
+import { enterHyprlandGamingOverlay, runHyprctl } from "../../window/HyprlandGamingOverlay.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import {
   GAMING_OVERLAY_CHANNEL,
@@ -21,6 +22,14 @@ import {
 class GamingOverlayError extends Schema.TaggedError<GamingOverlayError>()("GamingOverlayError", {
   message: Schema.String,
 }) {}
+
+/** `t3code --gaming-overlay` enters gaming mode in the running app, or at launch. */
+export const GAMING_OVERLAY_LAUNCH_FLAG = "--gaming-overlay";
+
+export const hasGamingOverlayLaunchFlag = (argv: ReadonlyArray<string>) =>
+  argv.includes(GAMING_OVERLAY_LAUNCH_FLAG);
+
+const NATIVE_BADGE_NAMESPACE = "t3-gaming-badge";
 
 function controller(
   window: Electron.BrowserWindow,
@@ -58,14 +67,31 @@ function controller(
             windowId: window.id,
             title: window.getTitle(),
           });
+          let clicks: Awaited<ReturnType<typeof startHyprlandBadgeClicks>> | undefined;
+          try {
+            clicks = await startHyprlandBadgeClicks({
+              namespace: NATIVE_BADGE_NAMESPACE,
+              handle: `t3_gaming_clicks_${process.pid}_${window.id}`,
+              env,
+              run: runHyprctl,
+              activate,
+            });
+          } catch (error) {
+            await host.restore();
+            throw error;
+          }
           return {
             ...host,
             updateBadge: badge.update,
             restore: async () => {
               try {
-                await host.restore();
+                await clicks.close();
               } finally {
-                await badge.close();
+                try {
+                  await host.restore();
+                } finally {
+                  await badge.close();
+                }
               }
             },
           };
@@ -129,19 +155,8 @@ function controller(
     // A disconnected renderer can no longer keep the badge's live status honest.
     void overlay.action("exit").catch(onCleanupError);
   });
-  let closeAfterCleanup = false;
   window.on("close", (event) => {
-    if (closeAfterCleanup || !overlay.ownsWindowBounds) return;
-    event.preventDefault();
-    closeAfterCleanup = true;
-    // Finish removing the compositor shortcut before Electron can quit on the
-    // last window closing. A closed event is too late to await external IPC.
-    void overlay
-      .action("exit")
-      .catch(onCleanupError)
-      .finally(() => {
-        if (!window.isDestroyed()) window.close();
-      });
+    void overlay.close(event).catch(onCleanupError);
   });
   window.once("closed", () => {
     void overlay.action("exit").catch(onCleanupError);
@@ -150,29 +165,59 @@ function controller(
   return overlay;
 }
 
+const resolveController = Effect.gen(function* () {
+  const windows = yield* ElectronWindow.ElectronWindow;
+  const platform = yield* HostProcessPlatform;
+  const env = yield* HostProcessEnvironment;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const helperPath = environment.path.join(
+    environment.isPackaged ? environment.resourcesPath : environment.appRoot,
+    environment.isPackaged ? "hyprland-capture" : "native/hyprland-snap-shot/target/release",
+    "t3-hyprland-snap-shot",
+  );
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  const window = yield* windows.main;
+  if (Option.isNone(window)) return Option.none();
+  return Option.some(
+    controller(window.value, platform, env, helperPath, (error) => {
+      runFork(Effect.logError("Gaming overlay cleanup failed", error));
+    }),
+  );
+});
+
+/**
+ * Enters gaming mode from the launcher without going through the renderer: the
+ * roster opens as soon as the badge is up, and the chat starts hidden so the
+ * game keeps focus. A mapped window is required; Hyprland identifies it by pid.
+ */
+export const enterGamingOverlayAtLaunch = Effect.gen(function* () {
+  const overlay = yield* resolveController;
+  if (Option.isNone(overlay)) return false;
+  const control = overlay.value;
+  const enter = async () => {
+    const state = await control.action("enter");
+    if (state.enabled && !control.previouslyEnabled) await control.action("hide");
+  };
+  yield* Effect.tryPromise({
+    try: enter,
+    catch: (error) =>
+      new GamingOverlayError({
+        message: error instanceof Error ? error.message : "Could not enter gaming mode.",
+      }),
+  });
+  return true;
+});
+
 export const gamingOverlay = DesktopIpc.makeIpcMethod({
   channel: GAMING_OVERLAY_CHANNEL,
   payload: Schema.Literals(["get", "enter", "exit", "hide", "show"]),
   result: DesktopGamingOverlayStateSchema,
   handler: Effect.fn("desktop.ipc.gamingOverlay")(function* (action) {
-    const windows = yield* ElectronWindow.ElectronWindow;
-    const platform = yield* HostProcessPlatform;
-    const env = yield* HostProcessEnvironment;
-    const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    const helperPath = environment.path.join(
-      environment.isPackaged ? environment.resourcesPath : environment.appRoot,
-      environment.isPackaged ? "hyprland-capture" : "native/hyprland-snap-shot/target/release",
-      "t3-hyprland-snap-shot",
-    );
-    const runFork = Effect.runForkWith(yield* Effect.context<never>());
-    const window = yield* windows.main;
-    if (Option.isNone(window))
+    const overlay = yield* resolveController;
+    if (Option.isNone(overlay))
       return yield* new GamingOverlayError({ message: "T3's main window is not available." });
     return yield* Effect.tryPromise({
-      try: () =>
-        controller(window.value, platform, env, helperPath, (error) => {
-          runFork(Effect.logError("Gaming overlay cleanup failed", error));
-        }).action(action),
+      try: () => overlay.value.action(action),
       catch: (error) =>
         new GamingOverlayError({
           message: error instanceof Error ? error.message : "Could not change gaming mode.",

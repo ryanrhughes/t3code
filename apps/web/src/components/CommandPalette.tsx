@@ -1825,9 +1825,9 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push({
       kind: "action",
       value: "action:gaming-overlay",
-      searchTerms: ["gaming", "wow", "overlay", "game", "whispers"],
+      searchTerms: ["gaming", "wow", "overlay", "game", "badge"],
       title: "Toggle gaming mode",
-      description: "Chat with agents alongside your game",
+      description: "Compact chat panel and badge over a fullscreen game",
       icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
       run: toggleGamingOverlay,
     });

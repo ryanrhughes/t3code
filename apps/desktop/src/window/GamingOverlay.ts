@@ -63,6 +63,16 @@ export class GamingOverlay {
     return this.saved !== undefined;
   }
 
+  /** True when the last `enter` found the mode already active. */
+  previouslyEnabled = false;
+
+  async close(event: Pick<Electron.Event, "preventDefault">) {
+    if (!this.ownsWindowBounds) return;
+    event.preventDefault();
+    // Closing the compact chat returns to the game; the badge and draft stay alive.
+    await this.action("hide");
+  }
+
   updateBadge(status: DesktopGamingBadge) {
     this.host?.updateBadge?.(status);
   }
@@ -75,6 +85,7 @@ export class GamingOverlay {
 
   action(action: "get" | "enter" | "exit" | "hide" | "show"): Promise<DesktopGamingOverlayState> {
     const next = this.queue.then(async () => {
+      if (action === "enter") this.previouslyEnabled = this.saved !== undefined;
       if (action === "enter" && !this.saved) await this.enter();
       if (action === "exit" && this.saved) await this.exit();
       if (action === "show" && this.host) await this.host.show();

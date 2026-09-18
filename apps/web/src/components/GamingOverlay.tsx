@@ -1,10 +1,13 @@
-import type { DesktopGamingBadge } from "@t3tools/contracts";
+import {
+  resolveEnvironmentMachineKind,
+  type DesktopGamingBadge,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { useUiStateStore } from "../uiStateStore";
 import { hasUnseenCompletion } from "./Sidebar.logic";
-import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { Gamepad2Icon, ListIcon, MinusIcon, MonitorIcon, SettingsIcon } from "lucide-react";
+import { ChevronLeftIcon, MinusIcon, MonitorIcon, SearchIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useEnvironments } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
@@ -14,10 +17,41 @@ import {
   gamingOverlayAction,
   useGamingOverlay,
 } from "../gamingOverlay";
+import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { gamingBadgeSummary, gamingThreadStatus } from "./gamingOverlay.logic";
-import { Button } from "./ui/button";
+import { Kbd } from "./ui/kbd";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import "./gamingOverlay.css";
 
+const CORNER_KEY = "t3code:gaming-badge-corner";
+const CORNERS = ["top-right", "top-left", "bottom-right", "bottom-left"] as const;
+type Corner = DesktopGamingBadge["corner"];
+
+function readCorner(): Corner {
+  try {
+    const saved = localStorage.getItem(CORNER_KEY);
+    if (CORNERS.includes(saved as Corner)) return saved as Corner;
+  } catch {
+    /* Storage is optional. */
+  }
+  return "top-right";
+}
+
+function relativeTime(iso: string, now: number) {
+  const delta = Math.max(0, now - Date.parse(iso));
+  const minutes = Math.floor(delta / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/**
+ * Gaming mode is a view of the same renderer: the roster reads the environments,
+ * threads and unread markers the normal window already has, and the selected
+ * chat is the ordinary ChatView rendered inside the panel.
+ */
 export function GamingOverlay({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const params = useParams({ strict: false });
@@ -27,27 +61,39 @@ export function GamingOverlay({ children }: { children: ReactNode }) {
   const visited = useUiStateStore((state) => state.threadLastVisitedAtById);
   const [enteredAt] = useState(() => new Date().toISOString());
   const [previewHidden, setPreviewHidden] = useState(false);
-  const [corner, setCorner] = useState<DesktopGamingBadge["corner"]>(() => {
-    try {
-      const saved = localStorage.getItem("t3code:gaming-badge-corner");
-      if (
-        saved === "top-left" ||
-        saved === "top-right" ||
-        saved === "bottom-left" ||
-        saved === "bottom-right"
-      )
-        return saved;
-    } catch {
-      /* Storage is optional. */
-    }
-    return "top-right";
-  });
+  const [corner, setCorner] = useState<Corner>(readCorner);
   const badgeError = useGamingOverlay((state) => state.badgeError);
   const shortcut = useGamingOverlay((state) => state.shortcutLabel);
   const [rosterOpen, setRosterOpen] = useState(!params.threadId);
   const [query, setQuery] = useState("");
-  const [environmentFilter, setEnvironmentFilter] = useState("");
+  const [environmentFilter, setEnvironmentFilter] = useState<EnvironmentId | "">("");
   const [needsYouOnly, setNeedsYouOnly] = useState(false);
+  // Relative times only need a coarse clock; it ticks while the roster is open.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!rosterOpen) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [rosterOpen]);
+  const openAgents = useCallback(() => {
+    setNow(Date.now());
+    setPreviewHidden(false);
+    setQuery("");
+    setEnvironmentFilter("");
+    setNeedsYouOnly(false);
+    setRosterOpen(true);
+  }, []);
+
+  const machineById = useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => [
+          environment.environmentId,
+          resolveEnvironmentMachineKind(environment.serverConfig),
+        ]),
+      ),
+    [environments],
+  );
   const roster = useMemo(() => {
     const byEnvironment = new Map(
       environments.map((environment) => [environment.environmentId, environment]),
@@ -97,10 +143,8 @@ export function GamingOverlay({ children }: { children: ReactNode }) {
     (row) => row.thread.id === params.threadId && row.thread.environmentId === params.environmentId,
   );
 
-  const badge = gamingBadgeSummary(
-    roster,
-    environments.filter((env) => env.connection.phase !== "connected").length,
-  );
+  const offline = environments.filter((env) => env.connection.phase !== "connected");
+  const badge = gamingBadgeSummary(roster, offline.length);
   const alertsKey = JSON.stringify(badge.alerts);
   const previousAlerts = useRef(new Set<string>());
   const [pulseKey, setPulseKey] = useState(0);
@@ -122,19 +166,27 @@ export function GamingOverlay({ children }: { children: ReactNode }) {
       })
       .catch(() => undefined);
   }, [badge.attention, badge.unread, badge.working, badge.offline, alertsKey, corner]);
-  const openAgents = useCallback(() => {
-    setPreviewHidden(false);
-    setQuery("");
-    setEnvironmentFilter("");
-    setNeedsYouOnly(false);
-    setRosterOpen(true);
-  }, []);
   useEffect(() => window.desktopBridge?.onGamingOverlayActivate?.(openAgents), [openAgents]);
   const hide = () => {
     if (gamingBrowserPreview) setPreviewHidden(true);
     else void gamingOverlayAction("hide");
   };
+  const chooseCorner = (value: Corner) => {
+    setCorner(value);
+    try {
+      localStorage.setItem(CORNER_KEY, value);
+    } catch {
+      /* Storage is optional. */
+    }
+  };
   const badgeLabel = `${badge.attention} need you · ${badge.unread} unread · ${badge.working} working · ${badge.offline} offline`;
+  const badgeTone = badge.attention
+    ? "attention"
+    : badge.unread
+      ? "unread"
+      : badge.working
+        ? "working"
+        : "idle";
   return (
     <>
       {gamingBrowserPreview && (
@@ -142,25 +194,21 @@ export function GamingOverlay({ children }: { children: ReactNode }) {
           key={pulseKey}
           className="gaming-preview-badge"
           data-corner={corner}
-          data-tone={
-            badge.attention
-              ? "attention"
-              : badge.unread
-                ? "unread"
-                : badge.working
-                  ? "working"
-                  : "idle"
-          }
+          data-tone={badgeTone}
           data-pulse={pulseKey > 0 || undefined}
           aria-label={`Open T3 agents: ${badgeLabel}`}
           onClick={openAgents}
         >
-          <strong>T3</strong>
-          <small>{badge.attention + badge.unread || "•"}</small>
+          <span className="gaming-preview-badge-mark">T3</span>
+          {badge.attention + badge.unread > 0 && (
+            <span className="gaming-preview-badge-count">
+              {Math.min(99, badge.attention + badge.unread)}
+            </span>
+          )}
         </button>
       )}
       <section
-        className="gaming-overlay"
+        className="gaming-overlay dark"
         style={previewHidden ? { visibility: "hidden" } : undefined}
         aria-label="T3 gaming overlay"
         data-browser-preview={
@@ -180,49 +228,69 @@ export function GamingOverlay({ children }: { children: ReactNode }) {
         }}
       >
         <header className="gaming-overlay-titlebar">
-          <Gamepad2Icon size={17} aria-hidden />
-          <span>
-            T3 <span className="gaming-overlay-subtitle">Agent whispers</span>
-          </span>
-        </header>
-        <nav className="gaming-overlay-toolbar" aria-label="Gaming controls">
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setRosterOpen(!rosterOpen)}
-            aria-expanded={rosterOpen}
-          >
-            <ListIcon size={15} /> Agents{attentionCount > 0 ? ` · ${attentionCount} need you` : ""}
-          </Button>
-          <div className="flex-1" />
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            title="Exit gaming mode"
-            aria-label="Exit gaming mode"
-            onClick={() => void gamingOverlayAction("exit")}
-          >
-            <MonitorIcon />
-          </Button>
-          {(window.desktopBridge?.gamingOverlay || gamingBrowserPreview) && (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              title={`Back to game · ${shortcut ?? "Hide"}`}
-              aria-label="Hide gaming overlay"
-              onClick={hide}
+          {!rosterOpen && selected ? (
+            <button
+              type="button"
+              className="gaming-overlay-back"
+              onClick={() => {
+                setNow(Date.now());
+                setRosterOpen(true);
+              }}
+              aria-label="Back to agents"
             >
-              <MinusIcon />
-            </Button>
+              <ChevronLeftIcon size={16} aria-hidden />
+              <span className="gaming-overlay-title">{selected.thread.title}</span>
+            </button>
+          ) : (
+            <div className="gaming-overlay-heading">
+              <span className="gaming-overlay-wordmark" aria-hidden>
+                T3
+              </span>
+              <span className="gaming-overlay-title">Agents</span>
+              {attentionCount > 0 && (
+                <span className="gaming-overlay-pill" data-tone="attention">
+                  {attentionCount} need you
+                </span>
+              )}
+            </div>
           )}
-        </nav>
+          <div className="gaming-overlay-actions">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    className="gaming-overlay-icon-button"
+                    aria-label="Hide chat"
+                    onClick={hide}
+                  />
+                }
+              >
+                <MinusIcon size={15} aria-hidden />
+              </TooltipTrigger>
+              <TooltipPopup side="bottom">Hide · {shortcut ?? "Esc"}</TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    className="gaming-overlay-icon-button"
+                    aria-label="Hide chat"
+                    onClick={hide}
+                  />
+                }
+              >
+                <XIcon size={15} aria-hidden />
+              </TooltipTrigger>
+              <TooltipPopup side="bottom">Hide chat. The badge stays.</TooltipPopup>
+            </Tooltip>
+          </div>
+        </header>
         {badgeError && (
           <p className="gaming-overlay-error" role="alert">
             {badgeError}
           </p>
-        )}
-        {!rosterOpen && selected && (
-          <div className="gaming-overlay-chat-title">{selected.thread.title}</div>
         )}
         <div className="gaming-overlay-content">
           <div className="gaming-overlay-conversation" inert={rosterOpen}>
@@ -233,48 +301,76 @@ export function GamingOverlay({ children }: { children: ReactNode }) {
           {rosterOpen && (
             <div className="gaming-overlay-roster">
               <div className="gaming-overlay-filters">
-                <input
-                  aria-label="Find an agent thread"
-                  placeholder="Find a thread, project, or environment…"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                />
-                <div className="flex items-center gap-3">
-                  <select
-                    aria-label="Environment"
-                    value={environmentFilter}
-                    onChange={(event) => setEnvironmentFilter(event.target.value)}
+                <label className="gaming-overlay-search">
+                  <SearchIcon size={14} aria-hidden />
+                  <input
+                    aria-label="Find an agent thread"
+                    placeholder="Search threads"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
+                </label>
+                <div className="gaming-overlay-chips" role="group" aria-label="Filter">
+                  <button
+                    type="button"
+                    className="gaming-overlay-chip"
+                    data-active={!environmentFilter && !needsYouOnly}
+                    onClick={() => {
+                      setEnvironmentFilter("");
+                      setNeedsYouOnly(false);
+                    }}
                   >
-                    <option value="">All environments</option>
-                    {environments.map((environment) => (
-                      <option key={environment.environmentId} value={environment.environmentId}>
-                        {environment.label} · {connectionStatusText(environment.connection)}
-                      </option>
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    className="gaming-overlay-chip"
+                    data-active={needsYouOnly}
+                    data-tone="attention"
+                    onClick={() => setNeedsYouOnly((value) => !value)}
+                  >
+                    Needs you{attentionCount > 0 ? ` · ${attentionCount}` : ""}
+                  </button>
+                  {environments.length > 1 &&
+                    environments.map((environment) => (
+                      <button
+                        key={environment.environmentId}
+                        type="button"
+                        className="gaming-overlay-chip"
+                        data-active={environmentFilter === environment.environmentId}
+                        data-offline={environment.connection.phase !== "connected" || undefined}
+                        aria-label={`${environment.label} (${environment.connection.phase})`}
+                        onClick={() =>
+                          setEnvironmentFilter((current) =>
+                            current === environment.environmentId ? "" : environment.environmentId,
+                          )
+                        }
+                      >
+                        <EnvironmentMachineIcon
+                          aria-hidden
+                          kind={machineById.get(environment.environmentId) ?? "server"}
+                          className="size-3"
+                        />
+                        {environment.label}
+                      </button>
                     ))}
-                  </select>
-                  <label className="flex shrink-0 items-center gap-1 text-xs">
-                    <input
-                      type="checkbox"
-                      checked={needsYouOnly}
-                      onChange={(event) => setNeedsYouOnly(event.target.checked)}
-                    />{" "}
-                    Needs you
-                  </label>
                 </div>
               </div>
               <div className="gaming-overlay-threads">
                 {filtered.length === 0 && (
-                  <p className="p-6 text-center text-sm text-muted-foreground">
+                  <p className="gaming-overlay-empty">
                     {roster.length
                       ? "No matching threads."
-                      : "Your active threads will appear here. Add environments in Connections."}
+                      : "Threads from every connected environment appear here."}
                   </p>
                 )}
                 {filtered.slice(0, 100).map(({ thread, environment, project, status }) => (
                   <button
                     key={`${thread.environmentId}:${thread.id}`}
+                    type="button"
                     className="gaming-overlay-thread"
-                    data-selected={selected?.thread === thread}
+                    data-selected={selected?.thread === thread || undefined}
+                    data-tone={status.tone}
                     onClick={() => {
                       void navigate({
                         to: "/$environmentId/$threadId",
@@ -282,73 +378,67 @@ export function GamingOverlay({ children }: { children: ReactNode }) {
                       }).then(() => setRosterOpen(false));
                     }}
                   >
+                    <span className="gaming-overlay-thread-dot" aria-hidden />
                     <span className="gaming-overlay-thread-title">{thread.title}</span>
-                    <span className="gaming-overlay-status" data-tone={status.tone}>
-                      {status.label}
+                    <span className="gaming-overlay-thread-time">
+                      {relativeTime(thread.updatedAt, now)}
                     </span>
                     <span className="gaming-overlay-thread-meta">
-                      {environment?.label ?? "Unavailable environment"} · {project}
+                      <span className="gaming-overlay-status">{status.label}</span>
+                      <span className="gaming-overlay-thread-sep" aria-hidden>
+                        ·
+                      </span>
+                      <span className="truncate">
+                        {environment?.label ?? "Unavailable"} / {project}
+                      </span>
                     </span>
                   </button>
                 ))}
                 {filtered.length > 100 && (
-                  <p className="p-3 text-xs text-muted-foreground">
+                  <p className="gaming-overlay-empty">
                     Showing 100 of {filtered.length} threads. Search to narrow the list.
                   </p>
                 )}
               </div>
-              <div className="gaming-overlay-badge-settings">
-                <label>
-                  Badge position{" "}
+              <footer className="gaming-overlay-footer">
+                <span className="gaming-overlay-footer-item">
+                  <span className="gaming-overlay-legend" data-tone="attention" /> needs you
+                  <span className="gaming-overlay-legend" data-tone="unread" /> new reply
+                  <span className="gaming-overlay-legend" data-tone="working" /> working
+                </span>
+                <label className="gaming-overlay-corner">
+                  Badge
                   <select
                     aria-label="Badge position"
                     value={corner}
-                    onChange={(event) => {
-                      const value = event.target.value as DesktopGamingBadge["corner"];
-                      setCorner(value);
-                      try {
-                        localStorage.setItem("t3code:gaming-badge-corner", value);
-                      } catch {
-                        /* Storage is optional. */
-                      }
-                    }}
+                    onChange={(event) => chooseCorner(event.target.value as Corner)}
                   >
-                    {(["top-right", "top-left", "bottom-right", "bottom-left"] as const).map(
-                      (value) => (
-                        <option key={value} value={value}>
-                          {value.replace("-", " ")}
-                        </option>
-                      ),
-                    )}
+                    {CORNERS.map((value) => (
+                      <option key={value} value={value}>
+                        {value.replace("-", " ")}
+                      </option>
+                    ))}
                   </select>
                 </label>
-                <p>
-                  <span data-tone="attention">Gold: needs you</span> ·{" "}
-                  <span data-tone="unread">Green: new reply</span> · Blue: working
-                </p>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  void gamingOverlayAction("exit").then((exited) => {
-                    if (exited) return navigate({ to: "/settings/connections" });
-                  });
-                }}
-              >
-                <SettingsIcon size={14} /> Manage environments
-              </Button>
+                {shortcut && <Kbd>{shortcut}</Kbd>}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        className="gaming-overlay-exit"
+                        onClick={() => void gamingOverlayAction("exit")}
+                      />
+                    }
+                  >
+                    <MonitorIcon size={13} aria-hidden /> Exit
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">Return to the full T3 window</TooltipPopup>
+                </Tooltip>
+              </footer>
             </div>
           )}
         </div>
-        <footer className="gaming-overlay-footer">
-          <span className="truncate">
-            {selected
-              ? `${selected.environment?.label ?? "Offline"} · ${selected.status.label}`
-              : "Your agents, alongside your adventure"}
-          </span>
-          <kbd>{shortcut}</kbd>
-        </footer>
       </section>
     </>
   );

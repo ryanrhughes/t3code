@@ -128,32 +128,32 @@ finishes; the call's own result shows its status.
 
 ## Chat while gaming
 
-In the desktop app, open **Settings → General → Gaming mode**, or choose
-**Toggle gaming mode** from the command palette or **View** menu. Gaming mode
-turns the current window into a compact chat panel using your existing paired
-environments. Search across threads, filter to an environment, or choose
-**Needs you** to find approvals, questions, and plans waiting for your response.
-The conversation keeps the usual messaging, approval, and stop controls.
+Gaming mode turns the desktop window into a compact chat panel that floats
+over a fullscreen game. It uses the same window, environments, threads, drafts,
+and unread state as the normal app, so nothing needs to be paired or signed in
+again. Choose **Toggle gaming mode** from the command palette or **View** menu,
+or launch the app with `--gaming-overlay` to start at the badge. Launching with
+that flag while T3 is already running switches the running app into gaming mode.
 
-A small **T3 badge** stays visible when chat is hidden. Click it to open your
-agents. Gold means an agent needs you (including errors); green means an unread
-reply; blue means work is running. New alerts flash briefly, then stay marked
-until you read the reply or resolve the request. Opening the agent list does
-not clear unread replies. Disconnected environments are labeled offline.
-Choose **Badge position** in the agent list to move it to another corner.
-The badge appears on the monitor where you enter gaming mode.
+A small **T3 badge** stays on screen while the chat is hidden. Click it to open
+your agents. Gold means an agent needs you (including errors); green means an
+unread reply; blue means work is running. The count shows replies waiting for
+you. Opening the agent list does not clear unread replies; reading the thread
+does. Disconnected environments are labeled offline. Choose **Badge** in the
+panel footer to move it to another corner.
+
+Closing or hiding the panel returns focus to the game and keeps the badge, your
+place, and any draft. Press `Escape` or the shortcut shown in the panel to hide
+it. **Exit** in the footer restores the normal T3 window.
 
 On Linux, gaming mode supports Hyprland and X11. Hyprland places the panel on a
-temporary special workspace. The shortcut shown in the panel opens and hides
-it over your game; it defaults to `Ctrl+Shift+Space`, choosing an unused
-alternative if that is already assigned. Press `Escape` from the conversation
-to hide it. **Exit gaming mode** restores the normal T3 window. Your saved
-Hyprland configuration is not changed. After a Hyprland configuration reload,
-exit and re-enter gaming mode to restore its temporary shortcut.
+temporary special workspace and installs a temporary shortcut, defaulting to
+`Ctrl+Shift+Space`. The badge stays clickable while a game has captured the
+mouse. Your saved Hyprland configuration is not changed. After a Hyprland
+configuration reload, exit and re-enter gaming mode to restore the shortcut.
 
 Use windowed or borderless mode if your game covers the overlay on X11.
-Gaming mode runs alongside the game and works independently of its addon API,
-so it does not require a WoW addon or a particular WoW version.
+
 ## Snooze until later
 
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your

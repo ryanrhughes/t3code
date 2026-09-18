@@ -2173,8 +2173,8 @@ export function GeneralSettingsPanel() {
       {window.desktopBridge?.gamingOverlay && (
         <SettingsSection id="gaming-mode" title="Gaming mode">
           <SettingsRow
-            title="Agent whispers"
-            description="Keep your environments and agent conversations in a compact overlay while you play. Linux supports Hyprland and X11."
+            title="Compact overlay"
+            description="Turn this window into a small chat panel with a badge that floats over a fullscreen game. Everything here stays: environments, threads, drafts, and unread replies."
             control={
               <Button variant="outline" size="sm" onClick={() => void gamingOverlayAction("enter")}>
                 Enter gaming mode
