@@ -8,6 +8,7 @@ import {
   type DesktopHostTelemetryMessage as DesktopHostTelemetryMessageValue,
   type DesktopHostTelemetrySnapshot,
   DesktopTelemetryControlMessage,
+  type DesktopTelemetrySetAgentActivity,
   type DesktopUpdateStatusReport,
   type ResourceTelemetrySourceStatus,
 } from "@t3tools/contracts";
@@ -181,6 +182,10 @@ export class DesktopTelemetryReceiver extends Context.Service<
     ) => Effect.Effect<void, DesktopTelemetryControlError>;
     readonly cancelDesktopUpdate: (
       requestId: string,
+    ) => Effect.Effect<void, DesktopTelemetryControlError>;
+    /** Replaces the agent activity snapshot the desktop tray shows. */
+    readonly setAgentActivity: (
+      activity: Omit<DesktopTelemetrySetAgentActivity, "version" | "type">,
     ) => Effect.Effect<void, DesktopTelemetryControlError>;
     readonly desktopUpdates: Effect.Effect<
       {
@@ -648,6 +653,8 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
       sendControlMessage({ version: 1, type: "commitDesktopUpdate", requestId }),
     cancelDesktopUpdate: (requestId) =>
       sendControlMessage({ version: 1, type: "cancelDesktopUpdate", requestId }),
+    setAgentActivity: (activity) =>
+      sendControlMessage({ version: 1, type: "setAgentActivity", ...activity }),
     desktopUpdates: Effect.gen(function* () {
       const subscription = yield* PubSub.subscribe(updateReportChanges);
       const initial = yield* Ref.get(latestUpdateReport);
@@ -699,6 +706,7 @@ export const layerTest = (
       requestDesktopUpdate: () => Effect.void,
       commitDesktopUpdate: () => Effect.void,
       cancelDesktopUpdate: () => Effect.void,
+      setAgentActivity: () => Effect.void,
       desktopUpdates:
         overrides.desktopUpdates ??
         Effect.succeed({

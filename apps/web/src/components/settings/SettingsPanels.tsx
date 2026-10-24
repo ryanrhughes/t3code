@@ -38,6 +38,7 @@ import {
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
+import { TraySetting } from "./TraySetting";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import {
   readAppearanceModePreference,
@@ -1805,6 +1806,7 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+        <TraySetting />
       </SettingsSection>
 
       <SettingsSection id="text-generation" title="Text generation">

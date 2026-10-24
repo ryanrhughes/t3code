@@ -8,7 +8,11 @@ import * as Ref from "effect/Ref";
 
 import * as Electron from "electron";
 
-import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
+import {
+  type DesktopOpenThreadTarget,
+  type DesktopSnapShotEvent,
+  DEFAULT_CLIENT_SETTINGS,
+} from "@t3tools/contracts";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -21,6 +25,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   MENU_ACTION_CHANNEL,
+  OPEN_THREAD_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
   SNAP_SHOT_EVENT_CHANNEL,
   TRACKPAD_SCROLL_END_CHANNEL,
@@ -105,6 +110,10 @@ export class DesktopWindow extends Context.Service<
     readonly dispatchMenuAction: (
       action: string,
       options?: { readonly reveal?: boolean },
+    ) => Effect.Effect<void, DesktopWindowError>;
+    /** Shows the main window on a thread, creating the window there if none is open. */
+    readonly openThread: (
+      target: DesktopOpenThreadTarget,
     ) => Effect.Effect<void, DesktopWindowError>;
     readonly dispatchSnapShotEvent: (
       event: DesktopSnapShotEvent,
@@ -347,13 +356,12 @@ export const make = Effect.gen(function* () {
     yield* previewManager.reapplyZoom();
   });
 
-  const createWindow = Effect.fn("desktop.window.createWindow")(function* (): Effect.fn.Return<
-    Option.Option<Electron.BrowserWindow>,
-    DesktopWindowError
-  > {
+  const createWindow = Effect.fn("desktop.window.createWindow")(function* (
+    initialPath = "/",
+  ): Effect.fn.Return<Option.Option<Electron.BrowserWindow>, DesktopWindowError> {
     if (yield* Ref.get(desktopState.quitting)) return Option.none();
     yield* previewManager.getBrowserSession();
-    const applicationUrl = getDesktopUrl(environment.isDevelopment);
+    const applicationUrl = new URL(initialPath, getDesktopUrl(environment.isDevelopment)).href;
     const iconPaths = yield* assets.iconPaths;
     const iconOption = getIconOption(iconPaths, environment.platform);
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
@@ -851,14 +859,15 @@ export const make = Effect.gen(function* () {
     return Option.some(window);
   });
 
-  const createMain = Effect.gen(function* () {
-    const window = yield* createWindow();
+  const createMainAt = Effect.fn("desktop.window.createMain")(function* (initialPath?: string) {
+    const window = yield* createWindow(initialPath);
     if (Option.isSome(window)) {
       yield* electronWindow.setMain(window.value);
       yield* logWindowInfo("main window created");
     }
     return window;
-  }).pipe(Effect.withSpan("desktop.window.createMain"));
+  });
+  const createMain = createMainAt();
 
   const ensureMain = Effect.gen(function* () {
     if (yield* Ref.get(desktopState.quitting)) return Option.none<Electron.BrowserWindow>();
@@ -1014,6 +1023,19 @@ export const make = Effect.gen(function* () {
     dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action, options) {
       yield* Effect.annotateCurrentSpan({ action });
       yield* dispatchRendererEvent(MENU_ACTION_CHANNEL, action, options);
+    }),
+    openThread: Effect.fn("desktop.window.openThread")(function* (target) {
+      const existingWindow = yield* currentMainWindow;
+      if (Option.isSome(existingWindow)) {
+        yield* dispatchRendererEvent(OPEN_THREAD_CHANNEL, target);
+        return;
+      }
+      if (yield* waitingForBackend) return;
+      // A fresh renderer has no listener yet, so open it on the thread's route.
+      // It reveals itself once ready to show.
+      yield* createMainAt(
+        `/${encodeURIComponent(target.environmentId)}/${encodeURIComponent(target.threadId)}`,
+      );
     }),
     dispatchSnapShotEvent: Effect.fn("desktop.window.dispatchSnapShotEvent")(function* (event) {
       yield* Effect.annotateCurrentSpan({

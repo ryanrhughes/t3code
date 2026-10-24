@@ -256,6 +256,7 @@ function layerTest(input: {
       }),
     setServerExposureMode: () => Effect.die("unexpected server exposure update"),
     setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
+    setTrayEnabled: () => Effect.die("unexpected tray change"),
     setUpdateChannel: () => Effect.die("unexpected update channel change"),
     setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
     setWslDistro: () => Effect.die("unexpected WSL distro change"),

@@ -53,6 +53,7 @@ function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.De
           updateRequests: Stream.empty,
           updateCommits: Stream.empty,
           updateCancellations: Stream.empty,
+          agentActivity: Stream.empty,
         }),
         DesktopBrowserHost.layer,
         Layer.succeed(DesktopBackendConfiguration.DesktopBackendConfiguration, {
@@ -77,6 +78,7 @@ function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.De
           flushMainWindowBounds: Effect.void,
           prepareCaptureReveal: Effect.void,
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
+          openThread: () => Effect.die("unexpected open thread"),
           dispatchSnapShotEvent: () => Effect.void,
           zoomMain: () => Effect.die("unexpected zoom"),
           runMainContentsCommand: () => Effect.die("unexpected main contents command"),

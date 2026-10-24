@@ -33,6 +33,9 @@ export interface DesktopSettings {
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  // Shows the tray icon and keeps the app (and its backends) running after
+  // the last window closes. Quit from the tray or the app menu.
+  readonly trayEnabled: boolean;
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
   readonly wslBackendEnabled: boolean;
@@ -72,6 +75,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   serverExposureMode: "local-only",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
+  trayEnabled: false,
   updateChannel: "latest",
   updateChannelConfiguredByUser: false,
   wslBackendEnabled: false,
@@ -94,6 +98,7 @@ const DesktopSettingsDocument = Schema.Struct({
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
+  trayEnabled: Schema.optionalKey(Schema.Boolean),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   wslBackendEnabled: Schema.optionalKey(Schema.Boolean),
@@ -158,6 +163,9 @@ export class DesktopAppSettings extends Context.Service<
       readonly enabled: boolean;
       readonly port: Option.Option<number>;
     }) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setTrayEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setUpdateChannel: (
       channel: DesktopUpdateChannel,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
@@ -224,6 +232,7 @@ function normalizeDesktopSettingsDocument(
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
+    trayEnabled: parsed.trayEnabled === true,
     updateChannel: updateChannelConfiguredByUser
       ? Option.getOrElse(parsedUpdateChannel, () => defaultSettings.updateChannel)
       : defaultSettings.updateChannel,
@@ -261,6 +270,9 @@ function toDesktopSettingsDocument(
   }
   if (settings.tailscaleServePort !== defaults.tailscaleServePort) {
     document.tailscaleServePort = settings.tailscaleServePort;
+  }
+  if (settings.trayEnabled !== defaults.trayEnabled) {
+    document.trayEnabled = settings.trayEnabled;
   }
   if (settings.updateChannel !== defaults.updateChannel) {
     document.updateChannel = settings.updateChannel;
@@ -324,6 +336,10 @@ function setTailscaleServe(
         tailscaleServeEnabled: input.enabled,
         tailscaleServePort: port,
       };
+}
+
+function setTrayEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
+  return settings.trayEnabled === enabled ? settings : { ...settings, trayEnabled: enabled };
 }
 
 function setUpdateChannel(
@@ -543,6 +559,10 @@ export const make = Effect.gen(function* () {
       persist((settings) => setTailscaleServe(settings, input)).pipe(
         Effect.withSpan("desktop.settings.setTailscaleServe", { attributes: input }),
       ),
+    setTrayEnabled: (enabled) =>
+      persist((settings) => setTrayEnabled(settings, enabled)).pipe(
+        Effect.withSpan("desktop.settings.setTrayEnabled", { attributes: { enabled } }),
+      ),
     setUpdateChannel: (channel) =>
       persist((settings) => setUpdateChannel(settings, channel)).pipe(
         Effect.withSpan("desktop.settings.setUpdateChannel", { attributes: { channel } }),
@@ -601,6 +621,7 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setServerExposureMode: (mode) =>
           update((settings) => setServerExposureMode(settings, mode)),
         setTailscaleServe: (input) => update((settings) => setTailscaleServe(settings, input)),
+        setTrayEnabled: (enabled) => update((settings) => setTrayEnabled(settings, enabled)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
         setWslBackendEnabled: (enabled) =>
           update((settings) => setWslBackendEnabled(settings, enabled)),

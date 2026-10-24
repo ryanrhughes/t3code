@@ -14,6 +14,7 @@ import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopState from "./DesktopState.ts";
+import * as DesktopTray from "../window/DesktopTray.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 function layerElectronApp(
@@ -97,10 +98,19 @@ function layerDesktopWindow(
     flushMainWindowBounds: input.flushMainWindowBounds ?? Effect.void,
     prepareCaptureReveal: Effect.void,
     dispatchMenuAction: () => Effect.void,
+    openThread: () => Effect.void,
     dispatchSnapShotEvent: () => Effect.void,
     zoomMain: () => Effect.void,
     runMainContentsCommand: () => Effect.void,
     syncAppearance: Effect.void,
+  });
+}
+
+function layerDesktopTray(isActive: Effect.Effect<boolean> = Effect.succeed(false)) {
+  return Layer.succeed(DesktopTray.DesktopTray, {
+    sync: Effect.void,
+    isActive,
+    start: Effect.void,
   });
 }
 
@@ -126,6 +136,7 @@ describe("DesktopLifecycle", () => {
           ),
         ),
         Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(layerDesktopTray()),
         Layer.provideMerge(layerEnvironment),
         Layer.provideMerge(DesktopShutdown.layer),
         Layer.provideMerge(DesktopState.layer),
@@ -198,6 +209,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(layerElectronTheme),
         Layer.provideMerge(layerElectronWindow(destroyAll)),
         Layer.provideMerge(layerDesktopWindow({ flushMainWindowBounds })),
+        Layer.provideMerge(layerDesktopTray()),
         Layer.provideMerge(layerEnvironment),
         Layer.provideMerge(layerDesktopShutdown),
         Layer.provideMerge(DesktopState.layer),
@@ -240,6 +252,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(layerElectronTheme),
         Layer.provideMerge(layerElectronWindow()),
         Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(layerDesktopTray()),
         Layer.provideMerge(layerEnvironment),
         // Nothing marks this shutdown complete, so it stays pending.
         Layer.provideMerge(DesktopShutdown.layer),
@@ -293,6 +306,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(layerElectronTheme),
         Layer.provideMerge(layerElectronWindow()),
         Layer.provideMerge(layerDesktopWindow({ activate })),
+        Layer.provideMerge(layerDesktopTray()),
         Layer.provideMerge(layerEnvironment),
         Layer.provideMerge(DesktopShutdown.layer),
         Layer.provideMerge(DesktopState.layer),
@@ -308,6 +322,48 @@ describe("DesktopLifecycle", () => {
           appListeners.get("activate")?.();
 
           assert.equal(activationCount, 0);
+        }),
+      ).pipe(Effect.provide(layer));
+    }),
+  );
+  it.effect.each([
+    { trayActive: true, outcome: "keeps running", condition: "while" },
+    { trayActive: false, outcome: "quits", condition: "unless" },
+  ])("$outcome after the last window closes $condition the tray is showing", ({ trayActive }) =>
+    Effect.gen(function* () {
+      const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
+      const trayChecked = yield* Deferred.make<void>();
+      let quitCount = 0;
+      const quit = Effect.sync(() => {
+        quitCount += 1;
+      });
+      const layerEnvironment = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+        platform: "linux",
+        isDevelopment: false,
+      } as DesktopEnvironment.DesktopEnvironment["Service"]);
+      const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(layerElectronApp(appListeners, quit)),
+        Layer.provideMerge(layerElectronTheme),
+        Layer.provideMerge(layerElectronWindow()),
+        Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(
+          layerDesktopTray(Deferred.succeed(trayChecked, undefined).pipe(Effect.as(trayActive))),
+        ),
+        Layer.provideMerge(layerEnvironment),
+        Layer.provideMerge(DesktopShutdown.layer),
+        Layer.provideMerge(DesktopState.layer),
+      );
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+          yield* lifecycle.register;
+
+          appListeners.get("window-all-closed")?.();
+          yield* Deferred.await(trayChecked);
+          yield* Effect.yieldNow;
+
+          assert.equal(quitCount, trayActive ? 0 : 1);
         }),
       ).pipe(Effect.provide(layer));
     }),

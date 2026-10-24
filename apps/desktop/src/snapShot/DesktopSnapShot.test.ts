@@ -512,6 +512,7 @@ const layerTest = (
             activate: Effect.void,
             prepareCaptureReveal: Effect.sync(prepareCaptureRevealMock),
             dispatchMenuAction: () => Effect.void,
+            openThread: () => Effect.void,
             dispatchSnapShotEvent: () => Effect.void,
           } as unknown as DesktopWindow.DesktopWindow["Service"]),
         ),
@@ -689,6 +690,7 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
           state.preparedWithoutOverlay &&= flashWindows.every((window) => window.destroyed);
         }),
         dispatchMenuAction: () => Effect.void,
+        openThread: () => Effect.void,
         dispatchSnapShotEvent: (event: DesktopSnapShotEvent) => {
           switch (event.type) {
             case "requested":

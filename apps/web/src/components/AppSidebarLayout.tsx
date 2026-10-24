@@ -394,6 +394,14 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     };
   }, [navigate, pathname]);
 
+  useEffect(
+    () =>
+      window.desktopBridge?.onOpenThread?.(({ environmentId, threadId }) => {
+        void navigate({ to: "/$environmentId/$threadId", params: { environmentId, threadId } });
+      }),
+    [navigate],
+  );
+
   return (
     <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
       <SidebarProvider

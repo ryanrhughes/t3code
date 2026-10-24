@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -6,8 +7,10 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import type * as Electron from "electron";
@@ -89,6 +92,49 @@ describe("DesktopTelemetryPublisher", () => {
       yield* Effect.yieldNow;
 
       assert.isDefined(closeFiber.pollUnsafe());
+    }),
+  );
+
+  it.effect("keeps each backend's agent activity until that backend detaches", () =>
+    Effect.gen(function* () {
+      const layerPower = Layer.succeed(
+        ElectronPowerMonitor.ElectronPowerMonitor,
+        ElectronPowerMonitor.ElectronPowerMonitor.of({
+          isOnBatteryPower: Effect.succeed(false),
+          getSystemIdleTime: Effect.succeed(0),
+          getSystemIdleState: () => Effect.succeed("active"),
+          getCurrentThermalState: Effect.succeed("nominal"),
+          onSimpleEvent: () => Effect.void,
+          onThermalStateChange: () => Effect.void,
+          onSpeedLimitChange: () => Effect.void,
+        }),
+      );
+      const layer = DesktopTelemetryPublisher.layer.pipe(
+        Layer.provide(Layer.mergeAll(layerElectronApp([]), layerPower, layerHistory)),
+      );
+
+      yield* Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const message = (environmentId: string) =>
+          ({
+            version: 1,
+            type: "setAgentActivity",
+            environmentId: environmentId as EnvironmentId,
+            active: [],
+            finished: [],
+          }) as const;
+        const sourceIds = publisher.agentActivity.pipe(
+          Stream.runHead,
+          Effect.map((latest) => [...Option.getOrThrow(latest).keys()]),
+        );
+
+        yield* publisher.handleControlForSource("primary", message("env-local"));
+        yield* publisher.handleControlForSource("wsl", message("env-wsl"));
+        assert.deepEqual(yield* sourceIds, ["primary", "wsl"]);
+
+        yield* publisher.removeControlSource("wsl");
+        assert.deepEqual(yield* sourceIds, ["primary"]);
+      }).pipe(Effect.provide(layer));
     }),
   );
 });

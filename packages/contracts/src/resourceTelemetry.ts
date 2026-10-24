@@ -1,6 +1,13 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { HostPowerSnapshot } from "./background.ts";
 import { DesktopUpdateStateSchema } from "./ipc.ts";
 
@@ -344,12 +351,51 @@ export const DesktopTelemetryCancelDesktopUpdate = Schema.Struct({
 });
 export type DesktopTelemetryCancelDesktopUpdate = typeof DesktopTelemetryCancelDesktopUpdate.Type;
 
+const DesktopAgentActivityThreadFields = {
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  projectTitle: TrimmedNonEmptyString,
+};
+
+/** Same buckets as the sidebar status pill, minus the idle ones. */
+export const DesktopAgentActivityPhase = Schema.Literals(["working", "approval", "input"]);
+export type DesktopAgentActivityPhase = typeof DesktopAgentActivityPhase.Type;
+
+export const DesktopAgentActivityThread = Schema.Struct({
+  ...DesktopAgentActivityThreadFields,
+  phase: DesktopAgentActivityPhase,
+});
+export type DesktopAgentActivityThread = typeof DesktopAgentActivityThread.Type;
+
+export const DesktopAgentActivityFinishedThread = Schema.Struct({
+  ...DesktopAgentActivityThreadFields,
+  outcome: Schema.Literals(["completed", "failed"]),
+  finishedAt: IsoDateTime,
+});
+export type DesktopAgentActivityFinishedThread = typeof DesktopAgentActivityFinishedThread.Type;
+
+/**
+ * Server -> desktop main: what the agents on this backend are doing, so the
+ * tray can show it with no renderer open. A full snapshot, resent on every
+ * change. `finished` holds the few most recent turns that ended while this
+ * server process was running, newest first.
+ */
+export const DesktopTelemetrySetAgentActivity = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("setAgentActivity"),
+  environmentId: EnvironmentId,
+  active: Schema.Array(DesktopAgentActivityThread),
+  finished: Schema.Array(DesktopAgentActivityFinishedThread),
+});
+export type DesktopTelemetrySetAgentActivity = typeof DesktopTelemetrySetAgentActivity.Type;
+
 export const DesktopTelemetryControlMessage = Schema.Union([
   DesktopTelemetrySetDiagnosticsDemand,
   DesktopTelemetrySetHostPowerIntervals,
   DesktopTelemetryRequestDesktopUpdate,
   DesktopTelemetryCommitDesktopUpdate,
   DesktopTelemetryCancelDesktopUpdate,
+  DesktopTelemetrySetAgentActivity,
 ]);
 export type DesktopTelemetryControlMessage = typeof DesktopTelemetryControlMessage.Type;
 

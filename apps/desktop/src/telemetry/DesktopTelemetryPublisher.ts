@@ -4,6 +4,7 @@ import {
   type DesktopTelemetryControlMessage,
   type DesktopTelemetryCancelDesktopUpdate,
   type DesktopTelemetryCommitDesktopUpdate,
+  type DesktopTelemetrySetAgentActivity,
   type DesktopTelemetryRequestDesktopUpdate,
   type DesktopUpdateStatusReport,
   type HostPowerSnapshot,
@@ -20,6 +21,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
@@ -73,6 +75,9 @@ export class DesktopTelemetryPublisher extends Context.Service<
     readonly updateRequests: Stream.Stream<DesktopTelemetryRequestDesktopUpdate>;
     readonly updateCommits: Stream.Stream<DesktopTelemetryCommitDesktopUpdate>;
     readonly updateCancellations: Stream.Stream<DesktopTelemetryCancelDesktopUpdate>;
+    /** What the agents on each attached backend are doing, keyed by backend
+        source. Emits the current value first. */
+    readonly agentActivity: Stream.Stream<ReadonlyMap<string, DesktopTelemetrySetAgentActivity>>;
   }
 >()("@t3tools/desktop/telemetry/DesktopTelemetryPublisher") {}
 
@@ -175,6 +180,9 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateRequestQueue = yield* Queue.unbounded<DesktopTelemetryRequestDesktopUpdate>();
   const updateCommitQueue = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
+  const agentActivity = yield* SubscriptionRef.make<
+    ReadonlyMap<string, DesktopTelemetrySetAgentActivity>
+  >(new Map());
 
   const offer = (event: PowerEvent): void => {
     Queue.offerUnsafe(powerEvents, event);
@@ -350,17 +358,29 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         return Queue.offer(updateCommitQueue, message).pipe(Effect.asVoid);
       case "cancelDesktopUpdate":
         return Queue.offer(updateCancellationQueue, message).pipe(Effect.asVoid);
+      case "setAgentActivity":
+        return SubscriptionRef.update(agentActivity, (current) =>
+          new Map(current).set(sourceId, message),
+        );
     }
   };
   const removeControlSource: DesktopTelemetryPublisher["Service"]["removeControlSource"] = (
     sourceId,
   ) =>
-    Ref.modify(diagnosticsDemandSources, (sources) => {
-      const previous = sources.size > 0;
-      const next = new Set(sources);
+    SubscriptionRef.update(agentActivity, (current) => {
+      if (!current.has(sourceId)) return current;
+      const next = new Map(current);
       next.delete(sourceId);
-      return [[previous, next.size > 0] as const, next] as const;
+      return next;
     }).pipe(
+      Effect.andThen(
+        Ref.modify(diagnosticsDemandSources, (sources) => {
+          const previous = sources.size > 0;
+          const next = new Set(sources);
+          next.delete(sourceId);
+          return [[previous, next.size > 0] as const, next] as const;
+        }),
+      ),
       Effect.flatMap(([previous, enabled]) =>
         previous === enabled
           ? Effect.void
@@ -421,6 +441,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     updateRequests: Stream.fromQueue(updateRequestQueue),
     updateCommits: Stream.fromQueue(updateCommitQueue),
     updateCancellations: Stream.fromQueue(updateCancellationQueue),
+    agentActivity: SubscriptionRef.changes(agentActivity),
   });
 });
 

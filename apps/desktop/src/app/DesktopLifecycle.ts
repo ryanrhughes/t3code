@@ -3,6 +3,7 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -16,6 +17,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
+import * as DesktopTray from "../window/DesktopTray.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 export class DesktopLifecycleRelaunchError extends Schema.TaggedError<DesktopLifecycleRelaunchError>()(
@@ -40,10 +42,11 @@ export type DesktopLifecycleRuntimeServices =
 
 type DesktopLifecycleRegistrationServices =
   | DesktopLifecycleRuntimeServices
+  | DesktopTray.DesktopTray
   | ElectronWindow.ElectronWindow;
 
 /**
- * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
+ * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopTray | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
  */
 export class DesktopLifecycle extends Context.Service<
   DesktopLifecycle,
@@ -287,10 +290,27 @@ export const make = DesktopLifecycle.of({
         Effect.gen(function* () {
           const app = yield* ElectronApp.ElectronApp;
           const state = yield* DesktopState.DesktopState;
-          if (environment.platform !== "darwin" && !(yield* Ref.get(state.quitting))) {
+          const tray = yield* DesktopTray.DesktopTray;
+          if (
+            environment.platform !== "darwin" &&
+            !(yield* Ref.get(state.quitting)) &&
+            !(yield* tray.isActive)
+          ) {
             yield* app.quit;
           }
         }).pipe(Effect.withSpan("desktop.lifecycle.windowAllClosed")),
+      );
+    });
+    // Launching the app again while it runs in the tray with no window open
+    // reopens the window. DesktopClerk reveals an existing one.
+    yield* electronApp.on("second-instance", () => {
+      void runEffect(
+        Effect.gen(function* () {
+          const state = yield* DesktopState.DesktopState;
+          if (yield* Ref.get(state.quitting)) return;
+          if (Option.isSome(yield* electronWindow.currentMainOrFirst)) return;
+          yield* desktopWindow.activate;
+        }).pipe(Effect.withSpan("desktop.lifecycle.secondInstance")),
       );
     });
 

@@ -518,6 +518,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     desktopOnly: true,
   },
   {
+    id: "system-tray",
+    title: "System tray",
+    to: "/settings/general",
+    searchTerms: ["menu bar icon background keep running close window minimize status"],
+    desktopOnly: true,
+  },
+  {
     id: "text-generation-model",
     title: "Text generation model",
     to: "/settings/general",

@@ -1,5 +1,6 @@
 import type {
   DesktopBridge,
+  DesktopOpenThreadTarget,
   DesktopPreviewOpenLinkEvent,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingInputEvent,
@@ -28,6 +29,11 @@ function isSnapShotEvent(value: unknown): value is DesktopSnapShotEvent {
     SNAP_SHOT_EVENT_TYPES.has(type) &&
     (id === undefined || typeof id === "string")
   );
+}
+function isOpenThreadTarget(value: unknown): value is DesktopOpenThreadTarget {
+  if (typeof value !== "object" || value === null) return false;
+  const { environmentId, threadId } = value as { environmentId?: unknown; threadId?: unknown };
+  return typeof environmentId === "string" && typeof threadId === "string";
 }
 
 exposeClerkBridge({ passkeys: true });
@@ -116,6 +122,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL) !== false,
   setLocalEnvironmentEnabled: (enabled) =>
     ipcRenderer.invoke(IpcChannels.SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL, enabled),
+  getTrayEnabled: () => ipcRenderer.sendSync(IpcChannels.GET_TRAY_ENABLED_CHANNEL) === true,
+  setTrayEnabled: (enabled) => ipcRenderer.invoke(IpcChannels.SET_TRAY_ENABLED_CHANNEL, enabled),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
@@ -217,6 +225,16 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.on(IpcChannels.MENU_ACTION_CHANNEL, wrappedListener);
     return () => {
       ipcRenderer.removeListener(IpcChannels.MENU_ACTION_CHANNEL, wrappedListener);
+    };
+  },
+  onOpenThread: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, target: unknown) => {
+      if (!isOpenThreadTarget(target)) return;
+      listener(target);
+    };
+    ipcRenderer.on(IpcChannels.OPEN_THREAD_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.OPEN_THREAD_CHANNEL, wrappedListener);
     };
   },
   onSnapShotEvent: (listener) => {

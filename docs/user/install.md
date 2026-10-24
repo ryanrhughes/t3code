@@ -93,6 +93,18 @@ there. Install the provider CLIs inside that distro. T3 Code installs its own
 server runtime there automatically; the first launch after an app update can
 take longer.
 
+### Keep running in the system tray
+
+Turn on **Settings → General → System tray** to keep the desktop app and its
+agents running after you close the window. The tray icon (the menu bar on
+macOS) lists the agents that need you, the ones still working, and the ones
+that finished recently. Pick one to open its thread. While the window is
+closed, the tray sends desktop notifications that follow your notification
+setting. Choose **Quit T3 Code** from the tray to stop everything.
+
+GNOME only shows tray icons with the AppIndicator extension installed. If the
+icon is missing, launch T3 Code again to bring the window back.
+
 ### Open a project from a terminal
 
 With the desktop app already running on the same machine:

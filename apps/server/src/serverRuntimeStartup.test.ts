@@ -41,6 +41,7 @@ import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as DesktopAgentActivity from "./desktopActivity/DesktopAgentActivity.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -118,6 +119,7 @@ it.effect.each([
         Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ shutdown: Effect.void }),
         Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({ start: () => Effect.void }),
+        Layer.mock(DesktopAgentActivity.DesktopAgentActivity)({ start: () => Effect.void }),
         Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: Effect.never }),
         Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
           publish: (event) =>
