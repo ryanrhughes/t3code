@@ -407,6 +407,7 @@ pub struct ProjectedTurnItem {
 pub struct Run {
     pub id: String,
     pub status: String,
+    pub active_attempt_id: Option<String>,
 }
 
 impl Run {
@@ -443,9 +444,20 @@ impl RuntimeRequest {
 pub struct ThreadProjection {
     pub thread: ThreadShell,
     pub runs: Vec<Run>,
+    pub provider_turns: Vec<ProviderTurn>,
     pub runtime_requests: Vec<RuntimeRequest>,
     pub turn_items: Vec<TurnItem>,
     pub visible_turn_items: Vec<ProjectedTurnItem>,
+}
+
+/// One native provider turn; a run can only be steered while its active attempt has a running one.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProviderTurn {
+    pub id: String,
+    pub run_attempt_id: Option<String>,
+    /// `pending | running | completed | interrupted | failed | cancelled`.
+    pub status: String,
 }
 
 /// The thread events the client applies, decoded off the UI thread. Everything else only
@@ -455,6 +467,7 @@ pub enum ThreadEvent {
     Thread(ThreadShell),
     Deleted,
     Run(Run),
+    ProviderTurn(ProviderTurn),
     RuntimeRequest(RuntimeRequest),
     TurnItem(TurnItem),
     Other,
@@ -473,6 +486,9 @@ impl ThreadEvent {
             }
             "run.created" | "run.updated" => {
                 decode(payload).map_or(ThreadEvent::Other, ThreadEvent::Run)
+            }
+            "provider-turn.updated" => {
+                decode(payload).map_or(ThreadEvent::Other, ThreadEvent::ProviderTurn)
             }
             "runtime-request.updated" => {
                 decode(payload).map_or(ThreadEvent::Other, ThreadEvent::RuntimeRequest)
@@ -559,11 +575,49 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// How a message lands while a run may be active (`ComposerDispatchMode` in client-runtime).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DispatchMode {
+    /// No run active: start a turn.
+    Auto,
+    /// Redirect the active run with this message.
+    Steer,
+    /// Wait for the active run to finish, then start a turn.
+    Queue,
+    /// Stop the active run and start over with this message.
+    Restart,
+}
+
+impl DispatchMode {
+    /// `resolveComposerDispatchMode`: steer by default while running; the alternate modifier
+    /// (Ctrl/Cmd) picks the other. Waiting approvals force steer, since a send redirects the agent.
+    /// A run that can't take steering yet (still starting, or compacting) gets the message queued:
+    /// the server rejects a steer then.
+    pub fn resolve(
+        running: bool,
+        alternate: bool,
+        approvals_waiting: bool,
+        can_steer: bool,
+    ) -> DispatchMode {
+        if !running {
+            return DispatchMode::Auto;
+        }
+        if !can_steer {
+            return DispatchMode::Queue;
+        }
+        if alternate && !approvals_waiting {
+            DispatchMode::Queue
+        } else {
+            DispatchMode::Steer
+        }
+    }
+}
+
 pub fn message_dispatch(
     thread_id: &str,
     text: &str,
     model: Option<&ModelSelection>,
-    active_run: bool,
+    mode: DispatchMode,
 ) -> Value {
     let mut cmd = json!({
         "type": "message.dispatch",
@@ -574,10 +628,17 @@ pub fn message_dispatch(
         "messageId": new_id(),
         "text": text,
         "attachments": [],
-        // While a run is active the web steers it; otherwise it starts a new turn.
-        "deliveryIntent": if active_run { "steer" } else { "auto" },
-        "dispatchMode": { "type": "start_immediately" },
+        "dispatchMode": { "type": if mode == DispatchMode::Queue { "queue_after_active" } else { "start_immediately" } },
     });
+    let intent = match mode {
+        DispatchMode::Auto => Some("auto"),
+        DispatchMode::Steer => Some("steer"),
+        DispatchMode::Restart => Some("restart"),
+        DispatchMode::Queue => None,
+    };
+    if let Some(intent) = intent {
+        cmd["deliveryIntent"] = intent.into();
+    }
     if let Some(m) = model {
         cmd["modelSelection"] = serde_json::to_value(m).unwrap_or(Value::Null);
     }
@@ -698,6 +759,26 @@ mod tests {
                 item.is_streaming()
             ),
             ("assistant_message", Some("Hel"), true)
+        );
+    }
+
+    #[test]
+    fn follow_ups_steer_by_default_and_queue_with_the_modifier() {
+        use DispatchMode::*;
+        assert_eq!(DispatchMode::resolve(false, true, false, true), Auto);
+        assert_eq!(DispatchMode::resolve(true, false, false, true), Steer);
+        assert_eq!(DispatchMode::resolve(true, true, false, true), Queue);
+        // A send redirects an agent waiting on approval, so it can't queue behind it.
+        assert_eq!(DispatchMode::resolve(true, true, true, true), Steer);
+        // The server rejects a steer while the run starts or compacts.
+        assert_eq!(DispatchMode::resolve(true, false, false, false), Queue);
+        let queued = message_dispatch("t", "x", None, Queue);
+        assert_eq!(
+            (
+                queued.get("deliveryIntent"),
+                &queued["dispatchMode"]["type"]
+            ),
+            (None, &json!("queue_after_active"))
         );
     }
 

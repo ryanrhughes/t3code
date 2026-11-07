@@ -350,7 +350,9 @@ impl App {
             })
     }
 
-    pub fn send(&mut self, tx: &mut Tx) {
+    /// Sends the composer. `alternate` is the Ctrl/Cmd variant: queue instead of steer while the
+    /// agent works.
+    pub fn send(&mut self, alternate: bool, tx: &mut Tx) {
         let text = self.composer.text.trim().to_owned();
         if text.is_empty() {
             return;
@@ -362,15 +364,29 @@ impl App {
         };
         match self.selected.clone() {
             Some(id) => {
-                let active = self
-                    .thread
-                    .as_ref()
-                    .is_some_and(|t| t.active_run().is_some());
+                let thread = self.thread.as_ref();
+                let active = thread.is_some_and(|t| t.active_run().is_some());
+                let approvals_waiting = thread.is_some_and(|t| {
+                    t.runtime_requests.iter().any(|r| {
+                        r.status == "pending"
+                            && !matches!(
+                                r.kind.as_str(),
+                                "user_input" | "dynamic_tool_call" | "auth_refresh"
+                            )
+                    })
+                });
+                let can_steer = thread.is_some_and(|t| t.can_steer());
+                let mode = protocol::DispatchMode::resolve(
+                    active,
+                    alternate,
+                    approvals_waiting,
+                    can_steer,
+                );
                 session.dispatch(protocol::message_dispatch(
                     &id,
                     &text,
                     self.model.as_ref(),
-                    active,
+                    mode,
                 ));
             }
             None => {

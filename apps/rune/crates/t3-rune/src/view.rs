@@ -639,8 +639,8 @@ fn turn_item(s: &App, look: &Look, item: &TurnItem) -> El {
     let k = &look.kit;
     let txt = item.text.as_deref().unwrap_or("");
     match item.kind.as_str() {
-        "user_message" => row().w_full().justify_end().child(
-            col()
+        "user_message" => {
+            let bubble = col()
                 .max_w(COLUMN * 0.8)
                 .px(14.0)
                 .py(10.0)
@@ -652,8 +652,23 @@ fn turn_item(s: &App, look: &Look, item: &TurnItem) -> El {
                         .color(look.message_fg)
                         .wrap()
                         .selectable(true),
-                ),
-        ),
+                );
+            // How the message reached the agent, as the web's row marks it.
+            let settled = matches!(
+                item.status.as_str(),
+                "completed" | "failed" | "cancelled" | "interrupted"
+            );
+            let label = match item.input_intent.as_deref() {
+                Some("queued_turn") if !settled => Some("Queued"),
+                Some("steer" | "promoted_queued_to_steer") => Some("Steer"),
+                _ => None,
+            };
+            let mut c = col().w_full().items_end().gap(4.0).child(bubble);
+            if let Some(label) = label {
+                c = c.child(text(label).font(k.ty.small).color(look.muted));
+            }
+            c
+        }
         "assistant_message" => Markdown::new(txt.to_owned())
             .streaming(item.is_streaming())
             .selectable(true)
@@ -1171,7 +1186,17 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .caret(look.text, k.selection())
         .label("Message")
         .on_edit(|s: &mut App| &mut s.composer)
-        .on_submit(|s: &mut App, tx| s.send(tx));
+        .on_submit(|s: &mut App, tx| s.send(false, tx))
+        // Ctrl/Cmd+Return sends the alternate follow-up (queue while the agent works).
+        .on_input_key(|s: &mut App, ev: &rune::KeyEvent, tx| {
+            let alternate = matches!(ev.key, rune::Key::Enter)
+                && (ev.mods.cmd || ev.mods.ctrl)
+                && !ev.mods.shift;
+            if alternate {
+                s.send(true, tx);
+            }
+            alternate
+        });
     let field = col()
         .key("composer-field")
         .w_full()
@@ -1187,12 +1212,14 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
             .build(k)
             .key("stop")
     } else {
-        IconButton::new(&SEND)
+        let mut b = IconButton::new(&SEND)
             .variant(IconButtonVariant::Submit)
-            .label("Send")
-            .on_press_tx(|s: &mut App, tx| s.send(tx))
-            .build(k)
-            .key("send")
+            .label(if working { "Steer" } else { "Send" })
+            .on_press_tx(|s: &mut App, tx| s.send(tx.mods().cmd || tx.mods().ctrl, tx));
+        if working {
+            b = b.help("Return steers the agent. Ctrl+Return or Ctrl-click queues the message until it finishes.");
+        }
+        b.build(k).key("send")
     };
     // Wraps to a second line rather than clipping in a narrow tiled window.
     let mut controls = row()

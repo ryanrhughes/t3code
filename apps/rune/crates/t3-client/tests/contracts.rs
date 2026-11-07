@@ -1,7 +1,7 @@
 //! The client's hand-built wire values against the types generated from `packages/contracts`:
 //! when upstream changes a command or stream item, these fail instead of the server rejecting it.
 use serde_json::{Value, json};
-use t3_client::protocol::{self, ModelSelection};
+use t3_client::protocol::{self, DispatchMode, ModelSelection};
 use t3_contracts as c;
 
 fn decodes<T: serde::de::DeserializeOwned>(what: &str, v: Value) {
@@ -24,12 +24,18 @@ fn every_command_the_client_sends_matches_the_contract() {
     type Dispatch = c::OrchestrationDispatchCommandPayload;
     decodes::<Dispatch>(
         "message.dispatch",
-        protocol::message_dispatch("t1", "hi", Some(&model), false),
+        protocol::message_dispatch("t1", "hi", Some(&model), DispatchMode::Auto),
     );
     decodes::<Dispatch>(
         "message.dispatch (steer)",
-        protocol::message_dispatch("t1", "hi", None, true),
+        protocol::message_dispatch("t1", "hi", None, DispatchMode::Steer),
     );
+    for mode in [DispatchMode::Queue, DispatchMode::Restart] {
+        decodes::<Dispatch>(
+            "message.dispatch (queue, restart)",
+            protocol::message_dispatch("t1", "hi", None, mode),
+        );
+    }
     decodes::<Dispatch>("thread.stop", protocol::stop("t1", true, None).unwrap());
     decodes::<Dispatch>(
         "run.interrupt",

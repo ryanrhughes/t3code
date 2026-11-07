@@ -138,6 +138,7 @@ impl ShellState {
 pub struct ThreadState {
     pub thread: ThreadShell,
     pub runs: Vec<Run>,
+    pub provider_turns: Vec<ProviderTurn>,
     pub runtime_requests: Vec<RuntimeRequest>,
     /// Local turn items, by id.
     pub turn_items: Vec<TurnItem>,
@@ -154,6 +155,7 @@ impl ThreadState {
         ThreadState {
             thread: p.thread,
             runs: p.runs,
+            provider_turns: p.provider_turns,
             runtime_requests: p.runtime_requests,
             turn_items: p.turn_items,
             visible: p.visible_turn_items,
@@ -178,6 +180,9 @@ impl ThreadState {
                 self.refresh_visibility();
             }
             ThreadEvent::RuntimeRequest(req) => upsert(&mut self.runtime_requests, req, |r| &r.id),
+            ThreadEvent::ProviderTurn(turn) => {
+                upsert_rev(&mut self.provider_turns, turn, |t| &t.id)
+            }
             ThreadEvent::TurnItem(item) => {
                 let interrupt = item.kind == "run_interrupt_request";
                 let visible = self.is_visible(&item);
@@ -288,6 +293,24 @@ impl ThreadState {
         self.runs.iter().rev().find(|r| r.is_interruptible())
     }
 
+    /// Whether a steer can land now, as the orchestrator decides it: the active run is
+    /// `running` with a running provider turn on its active attempt, and isn't compacting.
+    pub fn can_steer(&self) -> bool {
+        let Some(run) = self.active_run().filter(|r| r.status == "running") else {
+            return false;
+        };
+        let turn = self.provider_turns.iter().any(|t| {
+            t.status == "running"
+                && t.run_attempt_id.is_some()
+                && t.run_attempt_id == run.active_attempt_id
+        });
+        let compacting = self
+            .turn_items
+            .iter()
+            .any(|i| i.kind == "compaction" && matches!(i.status.as_str(), "running" | "pending"));
+        turn && !compacting
+    }
+
     pub fn is_working(&self) -> bool {
         self.active_run().is_some() || self.thread.is_working()
     }
@@ -356,6 +379,32 @@ mod tests {
     }
 
     #[test]
+    fn steering_needs_a_running_provider_turn_on_the_active_attempt() {
+        let mut s = thread();
+        let run = |status: &str| Run {
+            id: "r".into(),
+            status: status.into(),
+            active_attempt_id: Some("a".into()),
+        };
+        let turn = |status: &str| ProviderTurn {
+            id: "p".into(),
+            run_attempt_id: Some("a".into()),
+            status: status.into(),
+        };
+        s.apply(1, "t", ThreadEvent::Run(run("starting")));
+        assert!(!s.can_steer());
+        s.apply(2, "t", ThreadEvent::Run(run("running")));
+        assert!(!s.can_steer(), "no provider turn yet");
+        s.apply(3, "t", ThreadEvent::ProviderTurn(turn("running")));
+        assert!(s.can_steer());
+        s.apply(4, "t", ThreadEvent::ProviderTurn(turn("completed")));
+        assert!(
+            !s.can_steer(),
+            "the run is still finishing, but the agent stopped listening"
+        );
+    }
+
+    #[test]
     fn stale_events_are_dropped_and_rolled_back_runs_hide_items() {
         let mut s = thread();
         s.apply(5, "t", ThreadEvent::TurnItem(item("a", 1, "r", "x")));
@@ -367,6 +416,7 @@ mod tests {
             ThreadEvent::Run(Run {
                 id: "r".into(),
                 status: "rolled_back".into(),
+                ..Default::default()
             }),
         );
         assert!(s.visible.is_empty());
@@ -376,6 +426,7 @@ mod tests {
             ThreadEvent::Run(Run {
                 id: "r".into(),
                 status: "completed".into(),
+                ..Default::default()
             }),
         );
         assert_eq!(s.visible.len(), 1);
