@@ -2205,14 +2205,39 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .child(surface)
 }
 
+/// The provider model a selection names, if this server offers it.
+fn selected_model<'a>(
+    s: &'a App,
+    m: &ModelSelection,
+) -> Option<&'a t3_client::protocol::ServerProviderModel> {
+    s.config()?
+        .providers
+        .iter()
+        .find(|p| p.instance_id == m.instance_id)?
+        .models
+        .iter()
+        .find(|x| x.slug == m.model)
+}
+
+/// "Opus 5.5", plus the reasoning level when it isn't the model's default ("Opus 5.5 High").
 fn model_label(s: &App, m: &ModelSelection) -> String {
-    let provider = s
-        .config()
-        .and_then(|c| c.providers.iter().find(|p| p.instance_id == m.instance_id));
-    let model = provider.and_then(|p| p.models.iter().find(|x| x.slug == m.model));
-    model
+    let model = selected_model(s, m);
+    let mut label = model
         .map(|x| x.short_name.clone().unwrap_or_else(|| x.name.clone()))
-        .unwrap_or_else(|| m.model.clone())
+        .unwrap_or_else(|| m.model.clone());
+    let effort = model.and_then(|x| x.option_descriptors().iter().find(|d| d.kind == "select"));
+    if let Some(d) = effort {
+        let value = m
+            .option(&d.id)
+            .cloned()
+            .unwrap_or_else(|| d.default_value());
+        if value != d.default_value() {
+            if let Some(choice) = d.options.iter().find(|o| value == o.id.as_str()) {
+                label = format!("{label} {}", choice.label);
+            }
+        }
+    }
+    label
 }
 
 fn model_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
@@ -2233,6 +2258,46 @@ fn model_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .open(open)
         .min_width(240.0)
         .on_close(|s: &mut App| s.popup = None);
+    // The current model's settings first (reasoning, service tier, fast mode), then the models.
+    let descriptors = current
+        .as_ref()
+        .and_then(|m| selected_model(s, m))
+        .map(|m| m.option_descriptors().to_vec())
+        .unwrap_or_default();
+    if let Some(sel) = current.clone().filter(|_| !descriptors.is_empty()) {
+        let mut after_list = false;
+        for d in descriptors {
+            let value = sel
+                .option(&d.id)
+                .cloned()
+                .unwrap_or_else(|| d.default_value());
+            // Switches after a list would read as more of its choices.
+            if after_list {
+                menu = menu.separator();
+            }
+            after_list = d.kind != "boolean";
+            if d.kind == "boolean" {
+                let on = value == serde_json::Value::Bool(true);
+                let (sel, id) = (sel.clone(), d.id.clone());
+                menu = menu.item(MenuItem::new(d.label.clone()).checked(on).on_select(
+                    move |s: &mut App| s.model = Some(sel.with_option(&id, (!on).into())),
+                ));
+                continue;
+            }
+            menu = menu.group_label(d.label.clone());
+            for o in &d.options {
+                let (sel, id, pick) = (sel.clone(), d.id.clone(), o.id.clone());
+                let mut item = MenuItem::new(o.label.clone()).checked(value == o.id.as_str());
+                if let Some(desc) = &o.description {
+                    item = item.shortcut(desc.clone());
+                }
+                menu = menu.item(item.on_select(move |s: &mut App| {
+                    s.model = Some(sel.with_option(&id, pick.clone().into()))
+                }));
+            }
+        }
+        menu = menu.separator();
+    }
     for p in s
         .config()
         .into_iter()

@@ -39,6 +39,58 @@ pub struct ServerProviderModel {
     pub is_custom: bool,
     pub is_default: Option<bool>,
     pub is_legacy: Option<bool>,
+    pub capabilities: Option<ModelCapabilities>,
+}
+
+impl ServerProviderModel {
+    pub fn option_descriptors(&self) -> &[OptionDescriptor] {
+        self.capabilities
+            .as_ref()
+            .map_or(&[], |c| c.option_descriptors.as_slice())
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelCapabilities {
+    pub option_descriptors: Vec<OptionDescriptor>,
+}
+
+/// One of a model's settings: a `select` (reasoning effort, service tier) or a `boolean`
+/// (fast mode).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OptionDescriptor {
+    pub id: String,
+    pub label: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub options: Vec<OptionChoice>,
+    pub current_value: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OptionChoice {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub is_default: Option<bool>,
+}
+
+impl OptionDescriptor {
+    /// The value a model uses when a selection doesn't set this option.
+    pub fn default_value(&self) -> Value {
+        if self.kind == "boolean" {
+            return self.current_value.clone().unwrap_or(Value::Bool(false));
+        }
+        self.options
+            .iter()
+            .find(|o| o.is_default == Some(true))
+            .map(|o| Value::String(o.id.clone()))
+            .or_else(|| self.current_value.clone())
+            .unwrap_or(Value::Null)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -173,6 +225,35 @@ pub struct ModelSelection {
     /// `[{id, value}]` on the wire; decode also accepts the legacy object form, so keep it opaque.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Value>,
+}
+
+impl ModelSelection {
+    /// The value this selection sets for option `id`, from `[{id, value}]` or the legacy object.
+    pub fn option(&self, id: &str) -> Option<&Value> {
+        match self.options.as_ref()? {
+            Value::Array(list) => list.iter().find(|o| o["id"] == id).map(|o| &o["value"]),
+            Value::Object(map) => map.get(id),
+            _ => None,
+        }
+    }
+
+    /// This selection with option `id` set to `value`, in the `[{id, value}]` form.
+    pub fn with_option(&self, id: &str, value: Value) -> ModelSelection {
+        let mut list: Vec<Value> = match &self.options {
+            Some(Value::Array(list)) => list.clone(),
+            Some(Value::Object(map)) => map
+                .iter()
+                .map(|(k, v)| json!({ "id": k, "value": v }))
+                .collect(),
+            _ => Vec::new(),
+        };
+        list.retain(|o| o["id"] != id);
+        list.push(json!({ "id": id, "value": value }));
+        ModelSelection {
+            options: Some(Value::Array(list)),
+            ..self.clone()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -822,6 +903,33 @@ pub fn set_model(thread_id: &str, model: &ModelSelection) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setting_a_model_option_replaces_only_that_option() {
+        let sel = ModelSelection {
+            instance_id: "claudeAgent".into(),
+            model: "opus".into(),
+            options: Some(
+                json!([{ "id": "effort", "value": "low" }, { "id": "fastMode", "value": true }]),
+            ),
+        };
+        let next = sel.with_option("effort", json!("high"));
+        assert_eq!(next.option("effort"), Some(&json!("high")));
+        assert_eq!(next.option("fastMode"), Some(&json!(true)));
+        // The legacy object form reads, and writes back as the list.
+        let legacy = ModelSelection {
+            options: Some(json!({ "effort": "max" })),
+            ..sel
+        };
+        assert_eq!(legacy.option("effort"), Some(&json!("max")));
+        assert!(
+            legacy
+                .with_option("fastMode", json!(false))
+                .options
+                .unwrap()
+                .is_array()
+        );
+    }
 
     #[test]
     fn unknown_shell_items_and_fields_do_not_fail() {

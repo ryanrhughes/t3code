@@ -67,6 +67,11 @@ fn every_command_the_client_sends_matches_the_contract() {
     let mut launch = protocol::launch_thread("p1", "look", &model, "full-access");
     protocol::attach(&mut launch, &files);
     decodes::<c::OrchestrationLaunchThreadPayload>("launchThread (attachments)", launch);
+    let tuned = model.with_option("reasoningEffort", json!("high"));
+    decodes::<Dispatch>(
+        "message.dispatch (model options)",
+        protocol::message_dispatch("t1", "hi", Some(&tuned), DispatchMode::Auto),
+    );
     decodes::<c::AttachmentsCreateUploadUrlPayload>(
         "attachments.createUploadUrl",
         json!({ "type": "image", "name": "shot.png", "mimeType": "image/png", "sizeBytes": 10 }),
