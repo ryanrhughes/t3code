@@ -10,6 +10,7 @@ mod queue;
 mod settings;
 mod theme;
 mod view;
+mod workspace;
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -61,6 +62,7 @@ pub enum Popup {
     SettingsTheme,
     SettingsAccess,
     SettingsMachine,
+    BaseBranch,
 }
 
 /// Which changes the diff panel shows.
@@ -183,6 +185,10 @@ pub struct App {
     pub rename: Option<actions::Rename>,
     /// Plan mode for the next new thread (an open thread keeps its own on the server).
     pub draft_plan: bool,
+    /// A new thread's workspace: a new worktree (Some(true)), the checkout, or the server default.
+    pub draft_worktree: Option<bool>,
+    pub draft_base: Option<String>,
+    pub refs: Option<workspace::Refs>,
     /// The queued message the composer is rewriting, by run id.
     pub editing_queued: Option<String>,
     /// Files on their way into the next message.
@@ -378,6 +384,9 @@ impl App {
             thread_menu: None,
             rename: None,
             draft_plan: false,
+            draft_worktree: None,
+            draft_base: None,
+            refs: None,
             editing_queued: None,
             attachments: Vec::new(),
             next_attachment: 0,
@@ -751,6 +760,9 @@ impl App {
                     .map(|p| p.id.clone())
             });
         self.open_thread(None);
+        if self.draft_project != project {
+            self.draft_base = None;
+        }
         self.draft_project = project;
     }
 
@@ -862,7 +874,12 @@ impl App {
                 let runtime = self
                     .config()
                     .map_or("full-access".to_owned(), |c| c.default_runtime_mode());
+                if self.draft_in_worktree() && self.draft_base().is_none() {
+                    self.toast("Waiting for the branch list to pick a base branch", tx);
+                    return;
+                }
                 let mut input = protocol::launch_thread(&project, &text, &model, &runtime);
+                input["workspaceStrategy"] = self.draft_workspace();
                 protocol::attach(&mut input, &files);
                 if self.draft_plan {
                     input["interactionMode"] = "plan".into();
@@ -1598,6 +1615,10 @@ fn poll(s: &mut App, _now: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     s.sync_files();
+    // A draft headed for a worktree needs its project's branches for the base picker.
+    if s.selected.is_none() && s.draft_in_worktree() {
+        s.load_refs();
+    }
     if let Some(wait) = s.visit_due() {
         tx.wake_after(wait);
     }

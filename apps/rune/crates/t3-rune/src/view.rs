@@ -2184,6 +2184,9 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         );
     if s.selected.is_none() {
         controls = controls.child(project_menu(s, look, layer));
+        controls = controls.children(crate::workspace::controls(s, look, layer));
+    } else if let Some(branch) = crate::workspace::thread_branch(s, look) {
+        controls = controls.child(branch);
     }
     if let Status::Reconnecting { .. } = &s.status() {
         controls = controls.child(

@@ -87,6 +87,13 @@ fn every_command_the_client_sends_matches_the_contract() {
     let mut planned = protocol::launch_thread("p1", "plan it", &model, "full-access");
     planned["interactionMode"] = json!("plan");
     decodes::<c::OrchestrationLaunchThreadPayload>("launchThread (plan mode)", planned);
+    let mut worktree = protocol::launch_thread("p1", "work", &model, "full-access");
+    worktree["workspaceStrategy"] = json!({ "type": "worktree", "baseRef": "main" });
+    decodes::<c::OrchestrationLaunchThreadPayload>("launchThread (new worktree)", worktree);
+    decodes::<c::VcsListRefsPayload>(
+        "vcs.listRefs",
+        json!({ "cwd": "/repo", "refKind": "local", "limit": 100 }),
+    );
     // The sidebar's thread actions.
     for (kind, extra) in [
         ("thread.pin", json!({})),
