@@ -43,7 +43,13 @@ static PALETTE: Icon = Icon {
     view: 16.0,
     body: r#"<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="6.5" r="1" fill="currentColor"/><circle cx="9.5" cy="5.75" r="1" fill="currentColor"/><circle cx="10.5" cy="9" r="1" fill="currentColor"/>"#,
 };
-static BACK: Icon = Icon {
+static SETTINGS: Icon = Icon {
+    name: "t3-settings",
+    view: 16.0,
+    body: r#"<path d="M3 4.5H9M12 4.5H13M3 11.5H4M7 11.5H13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="10.5" cy="4.5" r="1.5" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="5.5" cy="11.5" r="1.5" stroke="currentColor" stroke-width="1.3" fill="none"/>"#,
+};
+
+pub(crate) static BACK: Icon = Icon {
     name: "t3-back",
     view: 16.0,
     body: r#"<path d="M10 3.5L5.5 8L10 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
@@ -206,6 +212,7 @@ fn pair_screen(
 fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> El {
     let k = &look.kit;
     let title = match (&s.selected, &s.thread) {
+        _ if s.settings_open => "Settings".to_owned(),
         (Some(_), Some(t)) => t.thread.title.clone(),
         (Some(id), None) => s
             .shell
@@ -251,9 +258,13 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
         .w_full()
         .h_full()
         .min_h(0.0)
-        .fill(look.canvas)
-        .child(timeline(s, look))
-        .child(composer(s, look, layer));
+        .fill(look.canvas);
+    let main = if s.settings_open {
+        main.child(crate::settings::page(s, look, layer))
+    } else {
+        main.child(timeline(s, look))
+            .child(composer(s, look, layer))
+    };
     let working = s.shell.threads.iter().any(|t| t.is_working());
     SplitView::new(main)
         .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar(s, look))
@@ -396,12 +407,15 @@ fn sidebar(s: &App, look: &Look) -> El {
                 .grow(1.0),
         )
         .child(
-            Button::new("Unpair")
-                .variant(ButtonVariant::GhostFaint)
+            IconButton::new(&SETTINGS)
+                .variant(IconButtonVariant::GhostMuted)
                 .control_size(ControlSize::Small)
-                .on_press(|s: &mut App| s.forget())
+                .label("Settings")
+                .shortcut("Ctrl ,")
+                .expanded(s.settings_open)
+                .on_press(|s: &mut App| s.toggle_settings())
                 .build(k)
-                .key("unpair"),
+                .key("settings-toggle"),
         );
     let (key_rows, build_rows, kit) = (rows.clone(), rows.clone(), k.clone());
     let selected = s.selected.clone();

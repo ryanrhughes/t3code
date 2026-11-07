@@ -2,6 +2,7 @@
 //! `cargo run -p t3-rune` opens the window; `-- --snap out.png --scene <name>` renders headless.
 mod files;
 mod prefs;
+mod settings;
 mod theme;
 mod view;
 
@@ -45,12 +46,14 @@ impl Screen {
 }
 
 /// Which popup is open; one at a time.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Popup {
     Model,
     Theme,
     Project,
     DiffTurn,
+    SettingsTheme,
+    SettingsAccess,
 }
 
 /// Which changes the diff panel shows.
@@ -109,6 +112,8 @@ pub struct App {
     /// The inspector beside the thread, showing the changes or the files.
     pub diff_pane: PaneState,
     pub inspector: Inspector,
+    /// The settings page, in place of the thread.
+    pub settings_open: bool,
     pub diff: DiffPanel,
     pub files: files::FilesPanel,
     pub collapsed: HashSet<String>,
@@ -164,6 +169,7 @@ pub enum PaletteAction {
     NewThread,
     ToggleDiff,
     ToggleFiles,
+    Settings,
     ToggleSidebar,
     OpenThread(String),
     Theme(String),
@@ -266,6 +272,7 @@ impl App {
             sidebar: PaneState::new(276.0).range(200.0, 520.0),
             diff_pane: PaneState::new(620.0).range(380.0, 1200.0).collapsed(),
             inspector: Inspector::Changes,
+            settings_open: false,
             diff: DiffPanel::default(),
             files: files::FilesPanel::default(),
             collapsed: HashSet::new(),
@@ -535,6 +542,7 @@ impl App {
                     alternate,
                     approvals_waiting,
                     can_steer,
+                    self.prefs.follow_up == "queue",
                 );
                 session.dispatch(protocol::message_dispatch(
                     &id,
@@ -846,6 +854,18 @@ impl App {
             },
             PaletteItem {
                 group: "Actions",
+                label: if self.settings_open {
+                    "Close settings"
+                } else {
+                    "Settings"
+                }
+                .into(),
+                detail: None,
+                shortcut: Some("Ctrl ,"),
+                action: PaletteAction::Settings,
+            },
+            PaletteItem {
+                group: "Actions",
                 label: "Toggle sidebar".into(),
                 detail: None,
                 shortcut: Some("Ctrl Shift B"),
@@ -904,6 +924,7 @@ impl App {
             PaletteAction::NewThread => self.new_thread(None),
             PaletteAction::ToggleDiff => self.toggle_diff(),
             PaletteAction::ToggleFiles => self.toggle_inspector(Inspector::Files),
+            PaletteAction::Settings => self.toggle_settings(),
             PaletteAction::ToggleSidebar => self.sidebar.toggle(),
             PaletteAction::OpenThread(id) => self.open_thread(Some(id)),
             PaletteAction::Theme(id) => self.set_theme(&id, tx),
@@ -1273,6 +1294,14 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.new_thread(None);
         return true;
     }
+    if ev.is_command(',') {
+        s.toggle_settings();
+        return true;
+    }
+    if matches!(ev.key, rune::Key::Escape) && s.settings_open && s.popup.is_none() {
+        s.toggle_settings();
+        return true;
+    }
     if ev.is_command('.') {
         s.stop();
         return true;
@@ -1415,6 +1444,10 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("files", |s| scene_files(s, None)),
     ("file", |s| {
         scene_files(s, Some("crates/t3-rune/src/files.rs"))
+    }),
+    ("settings", |s| {
+        scene_theme(s, "omarchy", "dark");
+        s.toggle_settings();
     }),
     ("fixture", load_fixture),
     ("omarchy", |s| scene_theme(s, "omarchy", "dark")),

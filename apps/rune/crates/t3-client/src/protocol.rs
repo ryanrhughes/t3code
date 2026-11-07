@@ -637,8 +637,8 @@ pub enum DispatchMode {
 }
 
 impl DispatchMode {
-    /// `resolveComposerDispatchMode`: steer by default while running; the alternate modifier
-    /// (Ctrl/Cmd) picks the other. Waiting approvals force steer, since a send redirects the agent.
+    /// `resolveComposerDispatchMode`: the `followUpBehavior` setting (steer unless
+    /// `queue_by_default`) while running; the alternate modifier (Ctrl/Cmd) picks the other. Waiting approvals force steer, since a send redirects the agent.
     /// A run that can't take steering yet (still starting, or compacting) gets the message queued:
     /// the server rejects a steer then.
     pub fn resolve(
@@ -646,6 +646,7 @@ impl DispatchMode {
         alternate: bool,
         approvals_waiting: bool,
         can_steer: bool,
+        queue_by_default: bool,
     ) -> DispatchMode {
         if !running {
             return DispatchMode::Auto;
@@ -653,7 +654,7 @@ impl DispatchMode {
         if !can_steer {
             return DispatchMode::Queue;
         }
-        if alternate && !approvals_waiting {
+        if !approvals_waiting && alternate != queue_by_default {
             DispatchMode::Queue
         } else {
             DispatchMode::Steer
@@ -813,13 +814,23 @@ mod tests {
     #[test]
     fn follow_ups_steer_by_default_and_queue_with_the_modifier() {
         use DispatchMode::*;
-        assert_eq!(DispatchMode::resolve(false, true, false, true), Auto);
-        assert_eq!(DispatchMode::resolve(true, false, false, true), Steer);
-        assert_eq!(DispatchMode::resolve(true, true, false, true), Queue);
+        assert_eq!(DispatchMode::resolve(false, true, false, true, false), Auto);
+        assert_eq!(
+            DispatchMode::resolve(true, false, false, true, false),
+            Steer
+        );
+        assert_eq!(DispatchMode::resolve(true, true, false, true, false), Queue);
+        // With follow-ups set to queue, the modifier steers instead.
+        assert_eq!(DispatchMode::resolve(true, false, false, true, true), Queue);
+        assert_eq!(DispatchMode::resolve(true, true, false, true, true), Steer);
         // A send redirects an agent waiting on approval, so it can't queue behind it.
-        assert_eq!(DispatchMode::resolve(true, true, true, true), Steer);
+        assert_eq!(DispatchMode::resolve(true, true, true, true, false), Steer);
+        assert_eq!(DispatchMode::resolve(true, false, true, true, true), Steer);
         // The server rejects a steer while the run starts or compacts.
-        assert_eq!(DispatchMode::resolve(true, false, false, false), Queue);
+        assert_eq!(
+            DispatchMode::resolve(true, false, false, false, false),
+            Queue
+        );
         let queued = message_dispatch("t", "x", None, Queue);
         assert_eq!(
             (

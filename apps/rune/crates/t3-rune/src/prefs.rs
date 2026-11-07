@@ -12,6 +12,8 @@ pub struct Prefs {
     pub mode: String,
     /// The `(defaultTheme, defaultThemeSetAt)` generation already adopted.
     pub adopted_default_theme: Option<String>,
+    /// What a message sent while an agent works does by default: `steer | queue`.
+    pub follow_up: String,
 }
 
 impl Default for Prefs {
@@ -20,6 +22,7 @@ impl Default for Prefs {
             theme: "system".into(),
             mode: "system".into(),
             adopted_default_theme: None,
+            follow_up: "steer".into(),
         }
     }
 }
@@ -67,6 +70,20 @@ impl Prefs {
             "light" | "dark" => id.to_owned(),
             _ => "system".to_owned(),
         };
+        self.save();
+    }
+
+    pub fn set_mode(&mut self, mode: &str) {
+        self.mode = mode.to_owned();
+        // "light" and "dark" name an appearance as well as a theme; keep them in step.
+        if matches!(self.theme.as_str(), "light" | "dark") && mode != "system" {
+            self.theme = mode.to_owned();
+        }
+        self.save();
+    }
+
+    pub fn set_follow_up(&mut self, behavior: &str) {
+        self.follow_up = behavior.to_owned();
         self.save();
     }
 
