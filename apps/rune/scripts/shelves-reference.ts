@@ -48,6 +48,15 @@ function webFunction(file: string, name: string) {
   );
   return new Function(`${js}; return ${name};`)();
 }
+const resolveSidebarThreadStatus = webFunction(
+  "apps/web/src/components/Sidebar.logic.ts",
+  "resolveSidebarThreadStatus",
+);
+const { createThreadNotificationGate } = await import(
+  NodeURL.pathToFileURL(
+    NodePath.resolve(repoRoot, "apps/web/src/components/ThreadNotificationCoordinator.logic.ts"),
+  ).href
+);
 const hasUnseenCompletion = webFunction(
   "apps/web/src/components/Sidebar.logic.ts",
   "hasUnseenCompletion",
@@ -220,6 +229,90 @@ const unreadCases: Record<string, Record<string, unknown>> = {
   "no run": { latestRunId: null, lastVisitedAt: "2026-11-07T09:00:00.000Z" },
 };
 
+const statusCases: Record<string, Record<string, unknown>> = {
+  idle: {},
+  "never ran": { latestRunId: null },
+  running: { status: "running" },
+  preparing: { status: "preparing" },
+  "waiting on another thread": { status: "running", blockedOnThreadWait: true },
+  "parked on a subagent": { status: "running", pendingBackgroundTasks: [task("subagent")] },
+  approval: { status: "waiting", pendingRuntimeRequest: request("command") },
+  question: { status: "waiting", pendingRuntimeRequest: request("user_input") },
+  "auth refresh": { status: "running", pendingRuntimeRequest: request("auth_refresh") },
+  "guest waiting": { pendingGuestMessageCount: 1 },
+  failed: { status: "failed" },
+  "usage limit": { status: "failed", lastErrorClass: "usage_limit" },
+};
+
+// The coordinator's per-thread observation (ThreadNotificationCoordinator.tsx `observeThreads`).
+function observation(s: Record<string, unknown>) {
+  const thread = present(s);
+  let status = resolveSidebarThreadStatus(thread);
+  if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
+  const attention = ["input", "request", "approval", "failed", "limited"].includes(status)
+    ? `${thread.latestRun?.runId ?? ""}:${status}`
+    : null;
+  const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
+  const settled = status === "ready" && thread.latestRun?.status === "completed";
+  return {
+    attention,
+    settled,
+    completedAt: settled && Number.isFinite(completedAt) ? completedAt : null,
+    archived: thread.archivedAt !== null,
+    quiet: s.latestRunStopRequested === true,
+  };
+}
+
+const done = (at: string, over: Record<string, unknown> = {}) => ({
+  status: "completed",
+  latestRunCompletedAt: at,
+  ...over,
+});
+const working = { status: "running", latestRunCompletedAt: null };
+const gateCases: Record<string, Array<Record<string, unknown>>> = {
+  "finishes while watched": [working, done("2026-11-07T11:00:00.000Z")],
+  "already finished when first seen": [done("2026-11-07T11:00:00.000Z")],
+  "asks for approval": [working, { status: "waiting", pendingRuntimeRequest: request("command") }],
+  "the same approval again": [
+    working,
+    { status: "waiting", pendingRuntimeRequest: request("command") },
+    { status: "waiting", pendingRuntimeRequest: request("command"), itemCount: 2 },
+  ],
+  "asks a question": [working, { status: "waiting", pendingRuntimeRequest: request("user_input") }],
+  "stopped by the user": [
+    working,
+    done("2026-11-07T11:00:00.000Z", { latestRunStopRequested: true }),
+  ],
+  archived: [
+    { ...working, archivedAt: "2026-11-07T10:00:00.000Z" },
+    done("2026-11-07T11:00:00.000Z", { archivedAt: "2026-11-07T10:00:00.000Z" }),
+  ],
+  fails: [working, { status: "failed", latestRunCompletedAt: "2026-11-07T11:00:00.000Z" }],
+  "hits a usage limit": [working, { status: "failed", lastErrorClass: "usage_limit" }],
+  "auth refresh stays quiet": [
+    working,
+    { status: "running", pendingRuntimeRequest: request("auth_refresh") },
+  ],
+  "two runs finish": [
+    done("2026-11-07T10:00:00.000Z"),
+    { ...working, latestRunId: "r2" },
+    done("2026-11-07T11:00:00.000Z", { latestRunId: "r2" }),
+    done("2026-11-07T11:00:00.000Z", { latestRunId: "r2", itemCount: 3 }),
+  ],
+};
+
+function runGate(steps: Array<Record<string, unknown>>) {
+  const fired: string[] = [];
+  const gate = createThreadNotificationGate((_key: string, kind: string) => fired.push(kind));
+  let prior: ReturnType<typeof observation> | undefined;
+  for (const over of steps) {
+    const next = observation(build(over));
+    gate.observe("t", prior, next, { archived: next.archived, quiet: next.quiet });
+    prior = next;
+  }
+  return fired;
+}
+
 const pinned = [
   shell({ id: "b", pinnedAt: NOW, pinOrderKey: "a1", createdAt: "2026-11-02T00:00:00.000Z" }),
   shell({ id: "a", pinnedAt: NOW, pinOrderKey: "a1", createdAt: "2026-11-03T00:00:00.000Z" }),
@@ -241,6 +334,15 @@ const fixture = {
     const s = build(over);
     return { name, shell: s, unread: hasUnseenCompletion(present(s)) };
   }),
+  status: Object.entries(statusCases).map(([name, over]) => {
+    const s = build(over);
+    return { name, shell: s, status: resolveSidebarThreadStatus(present(s)) };
+  }),
+  gate: Object.entries(gateCases).map(([name, steps]) => ({
+    name,
+    steps: steps.map(build),
+    notices: runGate(steps),
+  })),
   pinned: {
     shells: pinned,
     order: sortPinnedThreadsByOrderKey(pinned.map(present)).map((t) => t.id),

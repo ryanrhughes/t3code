@@ -225,6 +225,20 @@ pub fn page(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         ))
         .child(setting_row(
             look,
+            "Desktop notifications",
+            "When a thread needs you or finishes while T3 Code is in the background.",
+            Switch::new(s.prefs.notifications)
+                .label("Desktop notifications")
+                .hide_label()
+                .on_toggle(|s: &mut App| {
+                    let on = !s.prefs.notifications;
+                    s.prefs.set_notifications(on)
+                })
+                .build(k)
+                .key("notifications"),
+        ))
+        .child(setting_row(
+            look,
             "Follow-ups while an agent works",
             "Ctrl+Enter does the other for one message. Waiting approvals always steer.",
             segmented(

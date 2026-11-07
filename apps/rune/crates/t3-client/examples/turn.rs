@@ -2,7 +2,8 @@
 //! protocol code the UI uses: launch a thread, steer and queue follow-ups while it runs, accept
 //! approvals, answer questions, then print how the timeline landed.
 //! `cargo run -p t3-client --example turn -- [showcase|approval|question|multi-turn]`.
-//! Sandbox servers only: it starts turns, in the server's scratch project. Uses the saved pairing.
+//! Sandbox servers only: it starts turns, in a `rune-turns` project under the server's data
+//! folder. Uses the saved pairing.
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -69,31 +70,43 @@ fn main() -> anyhow::Result<()> {
     };
 
     wait("the shell", 15, &|s| s.shell.loaded)?;
-    // Turns end with a checkpoint (a git ref in the project's repo), so test turns run in the
-    // server's scratch project, never in a real repository someone works in.
-    let (tx, rx) = std::sync::mpsc::channel();
-    handle.call("projects.ensureScratch", json!({}), move |r| {
-        drop(tx.send(r))
-    });
-    let scratch = rx
-        .recv_timeout(Duration::from_secs(15))?
-        .map_err(anyhow::Error::msg)?;
-    let project = scratch["projectId"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("no scratch project"))?
-        .to_owned();
-    std::thread::sleep(Duration::from_millis(500));
-    let root = seen
+    // Turns end with a checkpoint (a git ref in the project's repo), so test turns run in a
+    // throwaway project under the server's own data folder, never in a repository someone works
+    // in. (Its scratch project is refused when that folder sits inside a checkout, as a worktree
+    // sandbox's does.)
+    let existing = seen
         .lock()
         .unwrap()
         .shell
-        .project(&project)
-        .map(|p| p.workspace_root.clone())
-        .unwrap_or_default();
-    println!("scratch project {project} at {root:?}");
+        .sidebar_projects()
+        .iter()
+        .find(|p| p.workspace_root.ends_with("/.t3/projects/rune-turns"))
+        .map(|p| (p.id.clone(), p.workspace_root.clone()));
+    let (project, root) = match existing {
+        Some(found) => found,
+        None => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            handle.call(
+                "projects.createNew",
+                json!({ "name": "rune-turns" }),
+                move |r| drop(tx.send(r)),
+            );
+            let created = rx
+                .recv_timeout(Duration::from_secs(15))?
+                .map_err(anyhow::Error::msg)?;
+            (
+                created["projectId"].as_str().unwrap_or_default().to_owned(),
+                created["workspaceRoot"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        }
+    };
+    println!("test project {project} at {root:?}");
     anyhow::ensure!(
         root.contains("/.t3/"),
-        "the scratch project isn't under a T3 home: {root:?}"
+        "the test project isn't under a T3 home: {root:?}"
     );
     let model = ModelSelection {
         instance_id: "devReplay".into(),

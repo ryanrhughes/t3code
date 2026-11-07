@@ -3,6 +3,7 @@
 mod actions;
 mod attach;
 mod files;
+mod notify;
 mod prefs;
 mod settings;
 mod theme;
@@ -113,6 +114,7 @@ pub struct Env {
     pub themes: Vec<ThemeDefinition>,
     /// Which session the events come from; a replaced session's late ones are dropped.
     generation: u64,
+    pub watch: notify::Watch,
 }
 
 impl Env {
@@ -209,6 +211,8 @@ pub struct App {
     /// The width `fit` last gave the inspector, to tell its own changes from the user's.
     inspector_fitted: Option<f32>,
     next_generation: u64,
+    /// Notifications only go out while the window is in the background.
+    pub window_focused: bool,
     /// Output of expanded command rows, by turn item id. Only expanded rows hold a stream.
     pub outputs: HashMap<String, CommandOutput>,
 }
@@ -360,6 +364,7 @@ impl App {
             inspector_wanted: None,
             inspector_fitted: None,
             next_generation: 0,
+            window_focused: true,
             outputs: HashMap::new(),
             menu: None,
             menu_seq: 0,
@@ -412,6 +417,7 @@ impl App {
             shell: ShellState::default(),
             themes: Vec::new(),
             generation,
+            watch: Default::default(),
         };
         match self.env_index(&env_id) {
             Some(i) => {
@@ -560,6 +566,7 @@ impl App {
                     tx.instant();
                 }
                 self.envs[idx].shell.apply(item);
+                self.watch_threads(idx);
                 if idx == self.focus {
                     self.track_visit();
                 }
@@ -1713,6 +1720,7 @@ fn load_fixture(s: &mut App) {
         shell: ShellState::default(),
         themes: Vec::new(),
         generation: 0,
+        watch: Default::default(),
     }];
     s.focus = 0;
     let mut themes = Vec::new();

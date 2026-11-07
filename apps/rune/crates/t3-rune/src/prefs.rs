@@ -17,6 +17,8 @@ pub struct Prefs {
     /// The sidebar's Settled shelf is open; closed by default, as the web's.
     pub settled_expanded: bool,
     pub snoozed_expanded: bool,
+    /// Desktop notifications; off by default, as the web's `notificationMode`.
+    pub notifications: bool,
 }
 
 impl Default for Prefs {
@@ -28,6 +30,7 @@ impl Default for Prefs {
             follow_up: "steer".into(),
             settled_expanded: false,
             snoozed_expanded: false,
+            notifications: false,
         }
     }
 }
@@ -89,6 +92,11 @@ impl Prefs {
 
     pub fn toggle_settled(&mut self) {
         self.settled_expanded = !self.settled_expanded;
+        self.save();
+    }
+
+    pub fn set_notifications(&mut self, on: bool) {
+        self.notifications = on;
         self.save();
     }
 

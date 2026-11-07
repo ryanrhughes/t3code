@@ -326,6 +326,11 @@ pub struct ThreadShell {
     pub latest_run_id: Option<String>,
     pub active_provider_thread_id: Option<String>,
     pub pending_background_tasks: Vec<BackgroundTask>,
+    pub blocked_on_thread_wait: Option<bool>,
+    /// `usage_limit` marks a failure as a usage limit.
+    pub last_error_class: Option<String>,
+    /// The user stopped the latest run, so finishing it isn't news.
+    pub latest_run_stop_requested: Option<bool>,
     /// Outer `None`: an older server that doesn't send it; `Some(None)`: sent as null.
     #[serde(deserialize_with = "present")]
     pub latest_run_completed_at: Option<Option<String>>,

@@ -2,8 +2,11 @@
 //! `tests/shelves.rs`: snoozing (`effectiveSnoozed` over `presentThreadShell` in
 //! `packages/client-runtime/src/state/{threadSettled,models}.ts`), unseen completions
 //! (`hasUnseenCompletion` in `apps/web/src/components/Sidebar.logic.ts`) and pinned order
-//! (`sortPinnedThreadsByOrderKey` in `state/threadSort.ts`).
+//! (`sortPinnedThreadsByOrderKey` in `state/threadSort.ts`), the sidebar status
+//! (`resolveSidebarThreadStatus` in `Sidebar.logic.ts`) and the notification gate
+//! (`apps/web/src/components/ThreadNotificationCoordinator{.logic.ts,.tsx}`).
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 
 use crate::protocol::ThreadShell;
 
@@ -81,16 +84,21 @@ fn background_holds(t: &ThreadShell) -> bool {
 
 /// `failureEdgeAt`: `None` when the thread hasn't failed; `Some(None)` when it failed at an
 /// unknown time.
-fn failure_edge_at(t: &ThreadShell) -> Option<Option<&str>> {
+/// `shellRuntime`'s status: `None` for a thread that never ran.
+fn runtime_status(t: &ThreadShell) -> Option<&str> {
     let park = background_holds(t) && t.status != "failed";
     if t.latest_run_id.is_none() && t.active_provider_thread_id.is_none() && !park {
         return None;
     }
-    let status = if park {
+    Some(if park {
         "idle"
     } else {
         t.activity_run_status.as_deref().unwrap_or(&t.status)
-    };
+    })
+}
+
+fn failure_edge_at(t: &ThreadShell) -> Option<Option<&str>> {
+    let status = runtime_status(t)?;
     if status != "error" && status != "failed" {
         return None;
     }
@@ -181,4 +189,120 @@ pub fn sort_pinned(threads: &mut [(&str, &ThreadShell)]) {
             }
         },
     );
+}
+
+/// `resolveSidebarThreadStatus`: approval, input, request, waiting, preparing, working,
+/// limited, failed or ready. Subagent requests can't be seen from a shell row.
+pub fn sidebar_status(t: &ThreadShell) -> &'static str {
+    match request_kind(t) {
+        Some("user_input") => return "input",
+        Some("auth_refresh") | None => {}
+        Some(_) => return "approval",
+    }
+    if t.pending_guest_message_count.unwrap_or(0) > 0 {
+        return "request";
+    }
+    let runtime = runtime_status(t);
+    if runtime == Some("running") && t.blocked_on_thread_wait == Some(true) {
+        return "waiting";
+    }
+    match runtime {
+        Some("preparing") => "preparing",
+        Some("queued" | "starting" | "running" | "waiting") => "working",
+        Some("idle") => "waiting",
+        Some("failed") if t.last_error_class.as_deref() == Some("usage_limit") => "limited",
+        Some("failed") => "failed",
+        _ => "ready",
+    }
+}
+
+/// What the notification gate watches on a thread (`ThreadNotificationObservation`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Observation {
+    /// Run and status while the thread needs the user.
+    pub attention: Option<String>,
+    /// Idle with its latest run completed.
+    pub settled: bool,
+    pub completed_at: Option<i64>,
+}
+
+pub fn observe(t: &ThreadShell) -> Observation {
+    let run_status = t.latest_run_id.as_ref().map(|_| {
+        if t.status == "idle" {
+            "completed"
+        } else {
+            t.status.as_str()
+        }
+    });
+    let mut status = sidebar_status(t);
+    if status == "ready" && run_status == Some("failed") {
+        status = "failed";
+    }
+    let attention = matches!(
+        status,
+        "input" | "request" | "approval" | "failed" | "limited"
+    )
+    .then(|| format!("{}:{status}", t.latest_run_id.as_deref().unwrap_or("")));
+    let settled = status == "ready" && run_status == Some("completed");
+    Observation {
+        attention,
+        settled,
+        completed_at: latest_run_completed_at(t)
+            .and_then(iso_ms)
+            .filter(|_| settled),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Notice {
+    /// The thread newly needs the user.
+    Input,
+    /// Its latest run finished.
+    Completion,
+}
+
+/// `createThreadNotificationGate`: decides which changes are worth a notification.
+#[derive(Default)]
+pub struct NotificationGate {
+    /// The newest completion per thread already notified, or deliberately skipped.
+    handled: HashMap<String, i64>,
+}
+
+impl NotificationGate {
+    fn skip(&mut self, key: &str, at: Option<i64>) {
+        if let Some(at) = at {
+            if self.handled.get(key).is_none_or(|h| at > *h) {
+                self.handled.insert(key.to_owned(), at);
+            }
+        }
+    }
+
+    /// The first sighting, archived threads and stopped runs never notify a completion.
+    pub fn observe(
+        &mut self,
+        key: &str,
+        prior: Option<&Observation>,
+        next: &Observation,
+        archived: bool,
+        quiet: bool,
+    ) -> Option<Notice> {
+        if prior.is_none() || archived || quiet {
+            self.skip(key, next.completed_at);
+        }
+        let prior = prior.filter(|_| !archived)?;
+        if next.attention.is_some() && next.attention != prior.attention {
+            return Some(Notice::Input);
+        }
+        let at = next.completed_at.filter(|_| next.settled)?;
+        if self.handled.get(key).is_some_and(|h| at <= *h) {
+            return None;
+        }
+        self.handled.insert(key.to_owned(), at);
+        Some(Notice::Completion)
+    }
+
+    /// Forgets threads that left the snapshot.
+    pub fn retain(&mut self, keys: &HashSet<String>) {
+        self.handled.retain(|k, _| keys.contains(k));
+    }
 }

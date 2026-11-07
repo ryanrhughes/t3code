@@ -2,7 +2,10 @@
 //! (`node apps/rune/scripts/shelves-reference.ts`).
 use serde_json::Value;
 use t3_client::protocol::ThreadShell;
-use t3_client::shelves::{has_unseen_completion, is_snoozed, iso_ms, sort_pinned};
+use t3_client::shelves::{
+    Notice, NotificationGate, has_unseen_completion, is_snoozed, iso_ms, observe, sidebar_status,
+    sort_pinned,
+};
 
 #[test]
 fn sidebar_rules_match_the_web() {
@@ -29,6 +32,46 @@ fn sidebar_rules_match_the_web() {
         );
         if got != want {
             failures.push(format!("unread {}: rust {got} != web {want}", case["name"]));
+        }
+    }
+    for case in fixture["status"].as_array().unwrap() {
+        let (got, want) = (
+            sidebar_status(&shell(&case["shell"])),
+            case["status"].as_str().unwrap(),
+        );
+        if got != want {
+            failures.push(format!("status {}: rust {got} != web {want}", case["name"]));
+        }
+    }
+    for case in fixture["gate"].as_array().unwrap() {
+        let mut gate = NotificationGate::default();
+        let mut prior = None;
+        let mut got = Vec::new();
+        for step in case["steps"].as_array().unwrap() {
+            let t = shell(step);
+            let next = observe(&t);
+            let quiet = t.latest_run_stop_requested == Some(true);
+            if let Some(n) =
+                gate.observe("t", prior.as_ref(), &next, t.archived_at.is_some(), quiet)
+            {
+                got.push(match n {
+                    Notice::Input => "input",
+                    Notice::Completion => "completion",
+                });
+            }
+            prior = Some(next);
+        }
+        let want: Vec<&str> = case["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        if got != want {
+            failures.push(format!(
+                "gate {}: rust {got:?} != web {want:?}",
+                case["name"]
+            ));
         }
     }
     let pinned: Vec<ThreadShell> = fixture["pinned"]["shells"]

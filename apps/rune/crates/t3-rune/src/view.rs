@@ -106,6 +106,8 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
         layer.push(region.build(k));
     }
     rune_kit::root(body, layer)
+        // Notifications go out only while the window is in the background.
+        .on_window_focus(|s: &mut App, focused, _| s.window_focused = focused)
 }
 
 // ---------------------------------------------------------------------------------------------
