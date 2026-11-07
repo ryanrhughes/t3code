@@ -236,6 +236,7 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
         )
         .reduced_motion(cx.is_reduced_motion())
         .build(k)
+        .on_layout(|s: &mut App, r: [f32; 4]| s.fit_width(r[2]))
 }
 
 #[derive(Clone)]
@@ -621,7 +622,14 @@ fn empty_state(s: &App, look: &Look) -> El {
                 .font(k.ty.body_medium)
                 .color(look.text),
         )
-        .child(text(hint).font(k.ty.ui).color(look.muted))
+        .child(
+            text(hint)
+                .font(k.ty.ui)
+                .color(look.muted)
+                .wrap()
+                .max_w(420.0)
+                .align(rune::Align::Center),
+        )
 }
 
 fn turn_item(s: &App, look: &Look, item: &TurnItem) -> El {
@@ -1093,10 +1101,12 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
             .build(k)
             .key("send")
     };
+    // Wraps to a second line rather than clipping in a narrow tiled window.
     let mut controls = row()
         .w_full()
         .gap(6.0)
         .center_y()
+        .flex_wrap()
         .child(model_menu(s, look, layer));
     if s.selected.is_none() {
         controls = controls.child(project_menu(s, look, layer));

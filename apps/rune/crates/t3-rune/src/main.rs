@@ -83,7 +83,13 @@ pub struct App {
     /// Wall-clock seconds, advanced once a second only while something works, so elapsed
     /// labels update without any continuous animation.
     pub clock: i64,
+    /// Below `NARROW` points the sidebar folds away, as a tiled window is often that narrow;
+    /// `sidebar_before_narrow` restores the user's choice when the window widens again.
+    pub narrow: bool,
+    sidebar_before_narrow: Option<bool>,
 }
+
+const NARROW: f32 = 720.0;
 
 impl App {
     fn new() -> App {
@@ -118,6 +124,8 @@ impl App {
             expanded: HashSet::new(),
             theme_generation: 0,
             clock: now_secs(),
+            narrow: false,
+            sidebar_before_narrow: None,
         };
         match cred {
             Some(c) => app.start(c),
@@ -413,6 +421,21 @@ impl App {
         tx.color_motion(rune::Spring::new(0.4, 0.0));
         self.rebuild_looks();
         self.popup = None;
+    }
+
+    /// Folds the sidebar away when the window turns narrow and restores it when it widens.
+    pub fn fit_width(&mut self, width: f32) {
+        let narrow = width < NARROW;
+        if narrow == self.narrow {
+            return;
+        }
+        self.narrow = narrow;
+        if narrow {
+            self.sidebar_before_narrow = Some(self.sidebar.is_open());
+            self.sidebar.set_open(false);
+        } else if let Some(open) = self.sidebar_before_narrow.take() {
+            self.sidebar.set_open(open);
+        }
     }
 
     /// Connects to this machine's server through the local `t3` CLI, no link needed.
