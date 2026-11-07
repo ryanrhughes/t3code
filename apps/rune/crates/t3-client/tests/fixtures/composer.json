@@ -1,0 +1,317 @@
+{
+  "triggers": [
+    {
+      "text": "@",
+      "cursor": 1,
+      "trigger": {
+        "kind": "path",
+        "query": "",
+        "rangeStart": 0,
+        "rangeEnd": 1
+      }
+    },
+    {
+      "text": "look at @src/ma",
+      "cursor": 15,
+      "trigger": {
+        "kind": "path",
+        "query": "src/ma",
+        "rangeStart": 8,
+        "rangeEnd": 15
+      }
+    },
+    {
+      "text": "look at @src/ma rest",
+      "cursor": 15,
+      "trigger": {
+        "kind": "path",
+        "query": "src/ma",
+        "rangeStart": 8,
+        "rangeEnd": 15
+      }
+    },
+    {
+      "text": "/",
+      "cursor": 1,
+      "trigger": {
+        "kind": "slash-command",
+        "query": "",
+        "rangeStart": 0,
+        "rangeEnd": 1
+      }
+    },
+    {
+      "text": "/rev",
+      "cursor": 4,
+      "trigger": {
+        "kind": "slash-command",
+        "query": "rev",
+        "rangeStart": 0,
+        "rangeEnd": 4
+      }
+    },
+    {
+      "text": "/review now",
+      "cursor": 11,
+      "trigger": null
+    },
+    {
+      "text": "text\n/com",
+      "cursor": 9,
+      "trigger": {
+        "kind": "slash-command",
+        "query": "com",
+        "rangeStart": 5,
+        "rangeEnd": 9
+      }
+    },
+    {
+      "text": "/model",
+      "cursor": 6,
+      "trigger": {
+        "kind": "slash-model",
+        "query": "",
+        "rangeStart": 0,
+        "rangeEnd": 6
+      }
+    },
+    {
+      "text": "/MODEL",
+      "cursor": 6,
+      "trigger": {
+        "kind": "slash-model",
+        "query": "",
+        "rangeStart": 0,
+        "rangeEnd": 6
+      }
+    },
+    {
+      "text": "/model gpt",
+      "cursor": 10,
+      "trigger": {
+        "kind": "slash-model",
+        "query": "gpt",
+        "rangeStart": 0,
+        "rangeEnd": 10
+      }
+    },
+    {
+      "text": "/model  opus 4 ",
+      "cursor": 15,
+      "trigger": {
+        "kind": "slash-model",
+        "query": "opus 4",
+        "rangeStart": 0,
+        "rangeEnd": 15
+      }
+    },
+    {
+      "text": "/models",
+      "cursor": 7,
+      "trigger": {
+        "kind": "slash-command",
+        "query": "models",
+        "rangeStart": 0,
+        "rangeEnd": 7
+      }
+    },
+    {
+      "text": "/usr/bin",
+      "cursor": 8,
+      "trigger": null
+    },
+    {
+      "text": "/usr/bin",
+      "cursor": 2,
+      "trigger": null
+    },
+    {
+      "text": "run /usr/lo",
+      "cursor": 11,
+      "trigger": null
+    },
+    {
+      "text": "fix #12",
+      "cursor": 7,
+      "trigger": {
+        "kind": "pull-request",
+        "query": "12",
+        "rangeStart": 4,
+        "rangeEnd": 7
+      }
+    },
+    {
+      "text": "fix #",
+      "cursor": 5,
+      "trigger": {
+        "kind": "pull-request",
+        "query": "",
+        "rangeStart": 4,
+        "rangeEnd": 5
+      }
+    },
+    {
+      "text": "fix #feat-x",
+      "cursor": 11,
+      "trigger": {
+        "kind": "pull-request",
+        "query": "feat-x",
+        "rangeStart": 4,
+        "rangeEnd": 11
+      }
+    },
+    {
+      "text": "#!/bin",
+      "cursor": 6,
+      "trigger": null
+    },
+    {
+      "text": "use $deploy",
+      "cursor": 11,
+      "trigger": {
+        "kind": "skill",
+        "query": "deploy",
+        "rangeStart": 4,
+        "rangeEnd": 11
+      }
+    },
+    {
+      "text": "costs $5",
+      "cursor": 8,
+      "trigger": null
+    },
+    {
+      "text": "costs $10k.",
+      "cursor": 11,
+      "trigger": null
+    },
+    {
+      "text": "costs $1.5e3",
+      "cursor": 12,
+      "trigger": null
+    },
+    {
+      "text": "€pdf",
+      "cursor": 4,
+      "trigger": {
+        "kind": "skill",
+        "query": "pdf",
+        "rangeStart": 0,
+        "rangeEnd": 4
+      }
+    },
+    {
+      "text": "£9.99",
+      "cursor": 5,
+      "trigger": null
+    },
+    {
+      "text": "$",
+      "cursor": 1,
+      "trigger": {
+        "kind": "skill",
+        "query": "",
+        "rangeStart": 0,
+        "rangeEnd": 1
+      }
+    },
+    {
+      "text": "plain words",
+      "cursor": 11,
+      "trigger": null
+    },
+    {
+      "text": "email me@x.com",
+      "cursor": 14,
+      "trigger": null
+    },
+    {
+      "text": "a @b c",
+      "cursor": 4,
+      "trigger": {
+        "kind": "path",
+        "query": "b",
+        "rangeStart": 2,
+        "rangeEnd": 4
+      }
+    },
+    {
+      "text": "tab\t@x",
+      "cursor": 6,
+      "trigger": {
+        "kind": "path",
+        "query": "x",
+        "rangeStart": 4,
+        "rangeEnd": 6
+      }
+    },
+    {
+      "text": "ünïcödé @fïle",
+      "cursor": 13,
+      "trigger": {
+        "kind": "path",
+        "query": "fïle",
+        "rangeStart": 8,
+        "rangeEnd": 13
+      }
+    },
+    {
+      "text": "héllo /cmd",
+      "cursor": 10,
+      "trigger": {
+        "kind": "slash-command",
+        "query": "cmd",
+        "rangeStart": 6,
+        "rangeEnd": 10
+      }
+    },
+    {
+      "text": "two\n@x\nthree",
+      "cursor": 6,
+      "trigger": {
+        "kind": "path",
+        "query": "x",
+        "rangeStart": 4,
+        "rangeEnd": 6
+      }
+    }
+  ],
+  "links": [
+    {
+      "path": "src/main.rs",
+      "link": "[main.rs](src/main.rs)"
+    },
+    {
+      "path": "README.md",
+      "link": "[README.md](README.md)"
+    },
+    {
+      "path": "dir with space/file name.txt",
+      "link": "[file name.txt](dir%20with%20space/file%20name.txt)"
+    },
+    {
+      "path": "src/a b(1).rs",
+      "link": "[a b(1).rs](src/a%20b%281%29.rs)"
+    },
+    {
+      "path": "notes/#todo?.md",
+      "link": "[#todo?.md](notes/%23todo%3F.md)"
+    },
+    {
+      "path": "weird/[brackets]\\back.rs",
+      "link": "[back.rs](weird/%5Bbrackets%5D%5Cback.rs)"
+    },
+    {
+      "path": "unicode/ünï.ts",
+      "link": "[ünï.ts](unicode/%C3%BCn%C3%AF.ts)"
+    },
+    {
+      "path": "deep/a/b/c/d.tsx",
+      "link": "[d.tsx](deep/a/b/c/d.tsx)"
+    },
+    {
+      "path": "100%/file.md",
+      "link": "[file.md](100%25/file.md)"
+    }
+  ]
+}

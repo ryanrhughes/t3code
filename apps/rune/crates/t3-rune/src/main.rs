@@ -71,6 +71,9 @@ pub struct App {
     /// The model the next send uses; None follows the thread's.
     pub model: Option<ModelSelection>,
     pub popup: Option<Popup>,
+    /// The suggestion menu the composer's caret opened (`@` files, `/` commands, `$` skills).
+    pub menu: Option<ComposerMenu>,
+    menu_seq: u64,
     /// Selected options per pending question: request id → question id → values.
     pub answers: HashMap<String, HashMap<String, Vec<String>>>,
     /// (id, message, wall-clock second it expires at).
@@ -98,6 +101,44 @@ pub struct CommandOutput {
     pub running: bool,
     pub loaded: bool,
     pub error: Option<String>,
+}
+
+pub struct ComposerMenu {
+    pub trigger: t3_client::composer::Trigger,
+    pub items: Vec<MenuItem>,
+    pub active: usize,
+    /// Waiting on a file search.
+    pub loading: bool,
+}
+
+pub struct MenuItem {
+    pub id: String,
+    pub label: String,
+    pub detail: Option<String>,
+    pub action: MenuAction,
+}
+
+pub enum MenuAction {
+    /// Replaces the trigger with this text: a file link, `/command ` or `$skill `.
+    Insert(String),
+    /// `/model`: clears the trigger and opens the model picker.
+    OpenModel,
+}
+
+/// Items whose label matches `query`: prefix matches first, then anywhere, case-insensitively.
+fn filter_items(items: Vec<MenuItem>, query: &str) -> Vec<MenuItem> {
+    let q = query.to_lowercase();
+    let (mut prefix, mut inner): (Vec<_>, Vec<_>) = items
+        .into_iter()
+        .filter(|i| i.label.to_lowercase().contains(&q))
+        .partition(|i| {
+            i.label
+                .to_lowercase()
+                .trim_start_matches(['/', '$'])
+                .starts_with(&q)
+        });
+    prefix.append(&mut inner);
+    prefix
 }
 
 /// The session subscription key for an item's output stream.
@@ -146,6 +187,8 @@ impl App {
             narrow: false,
             sidebar_before_narrow: None,
             outputs: HashMap::new(),
+            menu: None,
+            menu_seq: 0,
         };
         match cred {
             Some(c) => app.start(c),
@@ -539,6 +582,171 @@ impl App {
             }
         }
         self.outputs.clear();
+    }
+
+    /// Re-reads the trigger at the composer's caret after an edit and fills the menu for it.
+    pub fn refresh_menu(&mut self) {
+        use t3_client::composer::{TriggerKind, detect, file_link};
+        let Some(trigger) = detect(&self.composer.text, self.composer.focus) else {
+            self.menu = None;
+            return;
+        };
+        let provider = self.effective_model().and_then(|m| {
+            self.config
+                .as_ref()?
+                .providers
+                .iter()
+                .find(|p| p.instance_id == m.instance_id)
+                .cloned()
+        });
+        let items = match trigger.kind {
+            TriggerKind::Path => {
+                let cwd = self
+                    .thread
+                    .as_ref()
+                    .and_then(|t| t.thread.worktree_path.clone())
+                    .or_else(|| {
+                        let project = self
+                            .selected
+                            .as_deref()
+                            .and_then(|id| self.shell.thread(id))
+                            .map(|t| t.project_id.clone())
+                            .or(self.draft_project.clone())?;
+                        Some(self.shell.project(&project)?.workspace_root.clone())
+                    });
+                let (Some(cwd), Some(session), Some(handle)) =
+                    (cwd, &self.session, HANDLE.get().cloned())
+                else {
+                    self.menu = None;
+                    return;
+                };
+                self.menu_seq += 1;
+                let seq = self.menu_seq;
+                let payload =
+                    serde_json::json!({ "cwd": cwd, "query": trigger.query, "limit": 20 });
+                session.call("projects.searchEntries", payload, move |result| {
+                    handle.update(move |s: &mut App, _| {
+                        // Only the newest search may fill the menu.
+                        let (true, Some(menu)) = (s.menu_seq == seq, s.menu.as_mut()) else {
+                            return;
+                        };
+                        menu.loading = false;
+                        menu.items = result
+                            .ok()
+                            .and_then(|v| v["entries"].as_array().cloned())
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(|e| {
+                                let path = e["path"].as_str()?;
+                                let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+                                let suffix = if e["kind"] == "directory" { "/" } else { "" };
+                                Some(MenuItem {
+                                    id: path.to_owned(),
+                                    label: format!("{name}{suffix}"),
+                                    detail: (!dir.is_empty()).then(|| dir.to_owned()),
+                                    action: MenuAction::Insert(format!("{} ", file_link(path))),
+                                })
+                            })
+                            .collect();
+                        menu.active = 0;
+                    });
+                });
+                // Keep the last results showing while the new search runs, so the list doesn't blink.
+                let keep = match self.menu.take() {
+                    Some(m) if m.trigger.kind == TriggerKind::Path => m.items,
+                    _ => Vec::new(),
+                };
+                self.menu = Some(ComposerMenu {
+                    trigger,
+                    items: keep,
+                    active: 0,
+                    loading: true,
+                });
+                return;
+            }
+            TriggerKind::SlashCommand | TriggerKind::SlashModel => {
+                let mut items = vec![MenuItem {
+                    id: "slash:model".into(),
+                    label: "/model".into(),
+                    detail: Some("Switch response model for this thread".into()),
+                    action: MenuAction::OpenModel,
+                }];
+                for c in provider.iter().flat_map(|p| &p.slash_commands) {
+                    items.push(MenuItem {
+                        id: format!("slash:{}", c.name),
+                        label: format!("/{}", c.name),
+                        detail: c.description.clone(),
+                        action: MenuAction::Insert(format!("/{} ", c.name)),
+                    });
+                }
+                let query = if trigger.kind == TriggerKind::SlashModel {
+                    "model"
+                } else {
+                    trigger.query.as_str()
+                };
+                filter_items(items, query)
+            }
+            TriggerKind::Skill => {
+                let items = provider
+                    .iter()
+                    .flat_map(|p| &p.skills)
+                    .filter(|k| k.enabled)
+                    .map(|k| MenuItem {
+                        id: format!("skill:{}", k.name),
+                        label: format!("${}", k.name),
+                        detail: k
+                            .short_description
+                            .clone()
+                            .or_else(|| k.description.clone()),
+                        action: MenuAction::Insert(format!("${} ", k.name)),
+                    })
+                    .collect();
+                filter_items(items, &trigger.query)
+            }
+            TriggerKind::PullRequest => Vec::new(),
+        };
+        self.menu = (!items.is_empty()).then(|| ComposerMenu {
+            trigger,
+            items,
+            active: 0,
+            loading: false,
+        });
+    }
+
+    /// Applies a menu pick by item id.
+    pub fn pick(&mut self, id: &str) {
+        let Some(menu) = self.menu.take() else { return };
+        let Some(item) = menu.items.into_iter().find(|i| i.id == id) else {
+            return;
+        };
+        self.composer
+            .set_selection(menu.trigger.start, menu.trigger.end);
+        match item.action {
+            MenuAction::Insert(text) => self.composer.insert(&text),
+            MenuAction::OpenModel => {
+                self.composer.insert("");
+                self.popup = Some(Popup::Model);
+            }
+        }
+    }
+
+    /// Arrow keys, Return and Tab drive an open menu; Escape closes it. True when taken.
+    pub fn menu_key(&mut self, key: &rune::Key) -> bool {
+        let Some(menu) = self.menu.as_mut() else {
+            return false;
+        };
+        let n = menu.items.len();
+        match key {
+            rune::Key::Escape => self.menu = None,
+            rune::Key::Down if n > 0 => menu.active = (menu.active + 1) % n,
+            rune::Key::Up if n > 0 => menu.active = (menu.active + n - 1) % n,
+            rune::Key::Enter | rune::Key::Tab if n > 0 => {
+                let id = menu.items[menu.active.min(n - 1)].id.clone();
+                self.pick(&id);
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Folds the sidebar away when the window turns narrow and restores it when it widens.

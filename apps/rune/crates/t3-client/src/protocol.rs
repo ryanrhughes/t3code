@@ -53,6 +53,24 @@ pub struct ServerProvider {
     pub availability: Option<String>,
     pub accent_color: Option<String>,
     pub models: Vec<ServerProviderModel>,
+    pub slash_commands: Vec<SlashCommand>,
+    pub skills: Vec<Skill>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SlashCommand {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Skill {
+    pub name: String,
+    pub description: Option<String>,
+    pub short_description: Option<String>,
+    pub enabled: bool,
 }
 
 impl ServerProvider {

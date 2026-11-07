@@ -79,6 +79,10 @@ fn every_subscription_payload_matches_the_contract() {
         item.clone(),
     );
     decodes::<c::OrchestrationGetTurnItemPayload>("getTurnItem", item);
+    decodes::<c::ProjectsSearchEntriesPayload>(
+        "projects.searchEntries",
+        json!({ "cwd": "/repo", "query": "src/ma", "limit": 20 }),
+    );
 }
 
 /// Real traffic, when a capture is at hand (`cargo run -p t3-client --example capture`). It holds

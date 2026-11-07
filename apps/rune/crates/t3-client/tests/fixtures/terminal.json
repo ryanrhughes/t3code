@@ -1,34 +1,58 @@
 [
   {
     "name": "plain",
-    "chunks": ["hello\nworld\n"],
+    "chunks": [
+      "hello\nworld\n"
+    ],
     "max": 65536,
     "text": "hello\nworld\n",
     "truncated": false,
     "pending": "",
-    "spans": [["hello\nworld\n", null]]
+    "spans": [
+      [
+        "hello\nworld\n",
+        null
+      ]
+    ]
   },
   {
     "name": "crlf",
-    "chunks": ["a\r\nb\r\n"],
+    "chunks": [
+      "a\r\nb\r\n"
+    ],
     "max": 65536,
     "text": "a\nb\n",
     "truncated": false,
     "pending": "",
-    "spans": [["a\nb\n", null]]
+    "spans": [
+      [
+        "a\nb\n",
+        null
+      ]
+    ]
   },
   {
     "name": "progress",
-    "chunks": ["Downloading 10%\rDownloading 50%", "\rDownloading 100%\n"],
+    "chunks": [
+      "Downloading 10%\rDownloading 50%",
+      "\rDownloading 100%\n"
+    ],
     "max": 65536,
     "text": "Downloading 100%\n",
     "truncated": false,
     "pending": "",
-    "spans": [["Downloading 100%\n", null]]
+    "spans": [
+      [
+        "Downloading 100%\n",
+        null
+      ]
+    ]
   },
   {
     "name": "colors",
-    "chunks": ["\u001b[1;31merror\u001b[0m: bad\n\u001b[32mok\u001b[39m done"],
+    "chunks": [
+      "\u001b[1;31merror\u001b[0m: bad\n\u001b[32mok\u001b[39m done"
+    ],
     "max": 65536,
     "text": "\u001b[0;1;31merror\u001b[0m: bad\n\u001b[0;32mok\u001b[0m done",
     "truncated": false,
@@ -41,14 +65,20 @@
           "fontWeight": "600"
         }
       ],
-      [": bad\n", null],
+      [
+        ": bad\n",
+        null
+      ],
       [
         "ok",
         {
           "color": "#57ab5a"
         }
       ],
-      [" done", null]
+      [
+        " done",
+        null
+      ]
     ]
   },
   {
@@ -67,14 +97,20 @@
           "color": "rgb(255,135,0)"
         }
       ],
-      [" ", null],
+      [
+        " ",
+        null
+      ],
       [
         "rgb",
         {
           "color": "rgb(10,20,30)"
         }
       ],
-      [" ", null],
+      [
+        " ",
+        null
+      ],
       [
         "bg",
         {
@@ -86,7 +122,9 @@
   },
   {
     "name": "colon-colors",
-    "chunks": ["\u001b[38:2::255:0:0mred\u001b[0m \u001b[4:3mcurly\u001b[4:0m off"],
+    "chunks": [
+      "\u001b[38:2::255:0:0mred\u001b[0m \u001b[4:3mcurly\u001b[4:0m off"
+    ],
     "max": 65536,
     "text": "\u001b[0;38;2;255;0;0mred\u001b[0m \u001b[0;4mcurly\u001b[0m off",
     "truncated": false,
@@ -98,37 +136,62 @@
           "color": "rgb(255,0,0)"
         }
       ],
-      [" ", null],
+      [
+        " ",
+        null
+      ],
       [
         "curly",
         {
           "textDecorationLine": "underline"
         }
       ],
-      [" off", null]
+      [
+        " off",
+        null
+      ]
     ]
   },
   {
     "name": "erase-line",
-    "chunks": ["line one\u001b[2K\rreplaced\n"],
+    "chunks": [
+      "line one\u001b[2K\rreplaced\n"
+    ],
     "max": 65536,
     "text": "replaced\n",
     "truncated": false,
     "pending": "",
-    "spans": [["replaced\n", null]]
+    "spans": [
+      [
+        "replaced\n",
+        null
+      ]
+    ]
   },
   {
     "name": "cursor-up-rewrite",
-    "chunks": ["a: 1\nb: 1\n", "\u001b[2A\u001b[2Ka: 2\n\u001b[2Kb: 2\n"],
+    "chunks": [
+      "a: 1\nb: 1\n",
+      "\u001b[2A\u001b[2Ka: 2\n\u001b[2Kb: 2\n"
+    ],
     "max": 65536,
     "text": "a: 2\nb: 2\n",
     "truncated": false,
     "pending": "",
-    "spans": [["a: 2\nb: 2\n", null]]
+    "spans": [
+      [
+        "a: 2\nb: 2\n",
+        null
+      ]
+    ]
   },
   {
     "name": "split-escape",
-    "chunks": ["\u001b[3", "1mred\u001b", "[0m tail"],
+    "chunks": [
+      "\u001b[3",
+      "1mred\u001b",
+      "[0m tail"
+    ],
     "max": 65536,
     "text": "\u001b[0;31mred\u001b[0m tail",
     "truncated": false,
@@ -140,44 +203,76 @@
           "color": "#f47067"
         }
       ],
-      [" tail", null]
+      [
+        " tail",
+        null
+      ]
     ]
   },
   {
     "name": "osc-title",
-    "chunks": ["\u001b]0;title\u0007visible\n"],
+    "chunks": [
+      "\u001b]0;title\u0007visible\n"
+    ],
     "max": 65536,
     "text": "visible\n",
     "truncated": false,
     "pending": "",
-    "spans": [["visible\n", null]]
+    "spans": [
+      [
+        "visible\n",
+        null
+      ]
+    ]
   },
   {
     "name": "osc-hyperlink",
-    "chunks": ["\u001b]8;;http://x\u001b\\link\u001b]8;;\u001b\\ after"],
+    "chunks": [
+      "\u001b]8;;http://x\u001b\\link\u001b]8;;\u001b\\ after"
+    ],
     "max": 65536,
     "text": "link after",
     "truncated": false,
     "pending": "",
-    "spans": [["link after", null]]
+    "spans": [
+      [
+        "link after",
+        null
+      ]
+    ]
   },
   {
     "name": "tabs-backspace",
-    "chunks": ["a\tb\nabc\b\bX\n"],
+    "chunks": [
+      "a\tb\nabc\b\bX\n"
+    ],
     "max": 65536,
     "text": "a\tb\naXc\n",
     "truncated": false,
     "pending": "",
-    "spans": [["a\tb\naXc\n", null]]
+    "spans": [
+      [
+        "a\tb\naXc\n",
+        null
+      ]
+    ]
   },
   {
     "name": "clear-screen",
-    "chunks": ["old\n", "\u001b[2Jnew"],
+    "chunks": [
+      "old\n",
+      "\u001b[2Jnew"
+    ],
     "max": 65536,
     "text": "new",
     "truncated": false,
     "pending": "",
-    "spans": [["new", null]]
+    "spans": [
+      [
+        "new",
+        null
+      ]
+    ]
   },
   {
     "name": "clear-scrollback",
@@ -197,12 +292,19 @@
   },
   {
     "name": "save-restore",
-    "chunks": ["12345\u001b[s\u001b[3Dxx\u001b[uY \u001b7ab\u001b8Z"],
+    "chunks": [
+      "12345\u001b[s\u001b[3Dxx\u001b[uY \u001b7ab\u001b8Z"
+    ],
     "max": 65536,
     "text": "12xx5Y Zb",
     "truncated": false,
     "pending": "",
-    "spans": [["12xx5Y Zb", null]]
+    "spans": [
+      [
+        "12xx5Y Zb",
+        null
+      ]
+    ]
   },
   {
     "name": "scroll-past-window",
@@ -223,16 +325,25 @@
   },
   {
     "name": "position",
-    "chunks": ["abc\ndef\u001b[1;2HZ\u001b[5G!"],
+    "chunks": [
+      "abc\ndef\u001b[1;2HZ\u001b[5G!"
+    ],
     "max": 65536,
     "text": "aZc !\ndef",
     "truncated": false,
     "pending": "",
-    "spans": [["aZc !\ndef", null]]
+    "spans": [
+      [
+        "aZc !\ndef",
+        null
+      ]
+    ]
   },
   {
     "name": "inverse-badges",
-    "chunks": ["\u001b[7minv\u001b[0m \u001b[42mPASS\u001b[0m \u001b[30;47mdark on light\u001b[0m"],
+    "chunks": [
+      "\u001b[7minv\u001b[0m \u001b[42mPASS\u001b[0m \u001b[30;47mdark on light\u001b[0m"
+    ],
     "max": 65536,
     "text": "\u001b[0;7minv\u001b[0m \u001b[0;42mPASS\u001b[0m \u001b[0;30;47mdark on light\u001b[0m",
     "truncated": false,
@@ -245,7 +356,10 @@
           "backgroundColor": "#adbac7"
         }
       ],
-      [" ", null],
+      [
+        " ",
+        null
+      ],
       [
         "PASS",
         {
@@ -253,7 +367,10 @@
           "backgroundColor": "#57ab5a"
         }
       ],
-      [" ", null],
+      [
+        " ",
+        null
+      ],
       [
         "dark on light",
         {
@@ -279,7 +396,10 @@
           "color": "#ff938a"
         }
       ],
-      [" ", null],
+      [
+        " ",
+        null
+      ],
       [
         "bg",
         {
@@ -287,7 +407,10 @@
           "backgroundColor": "#daaa3f"
         }
       ],
-      [" ", null],
+      [
+        " ",
+        null
+      ],
       [
         "dim",
         {
@@ -296,7 +419,10 @@
           "textDecorationLine": "line-through"
         }
       ],
-      [" back", null]
+      [
+        " back",
+        null
+      ]
     ]
   },
   {
@@ -308,34 +434,60 @@
     "text": "ok ",
     "truncated": false,
     "pending": "",
-    "spans": [["ok ", null]]
+    "spans": [
+      [
+        "ok ",
+        null
+      ]
+    ]
   },
   {
     "name": "unicode",
-    "chunks": ["héllo → wörld\n"],
+    "chunks": [
+      "héllo → wörld\n"
+    ],
     "max": 65536,
     "text": "héllo → wörld\n",
     "truncated": false,
     "pending": "",
-    "spans": [["héllo → wörld\n", null]]
+    "spans": [
+      [
+        "héllo → wörld\n",
+        null
+      ]
+    ]
   },
   {
     "name": "c1-and-del",
-    "chunks": ["abc\u0000d\n"],
+    "chunks": [
+      "abc\u0000d\n"
+    ],
     "max": 65536,
     "text": "abcd\n",
     "truncated": false,
     "pending": "",
-    "spans": [["abcd\n", null]]
+    "spans": [
+      [
+        "abcd\n",
+        null
+      ]
+    ]
   },
   {
     "name": "intermediates",
-    "chunks": ["\u001b(Bplain \u001b#8x"],
+    "chunks": [
+      "\u001b(Bplain \u001b#8x"
+    ],
     "max": 65536,
     "text": "plain x",
     "truncated": false,
     "pending": "",
-    "spans": [["plain x", null]]
+    "spans": [
+      [
+        "plain x",
+        null
+      ]
+    ]
   },
   {
     "name": "tail-lines",
@@ -432,42 +584,60 @@
           "color": "#3b4048"
         }
       ],
-      ["\n", null],
+      [
+        "\n",
+        null
+      ],
       [
         "row 25",
         {
           "color": "#f47067"
         }
       ],
-      ["\n", null],
+      [
+        "\n",
+        null
+      ],
       [
         "row 26",
         {
           "color": "#57ab5a"
         }
       ],
-      ["\n", null],
+      [
+        "\n",
+        null
+      ],
       [
         "row 27",
         {
           "color": "#c69026"
         }
       ],
-      ["\n", null],
+      [
+        "\n",
+        null
+      ],
       [
         "row 28",
         {
           "color": "#539bf5"
         }
       ],
-      ["\n", null],
+      [
+        "\n",
+        null
+      ],
       [
         "row 29",
         {
           "color": "#b083f0"
         }
       ],
-      ["\n", null]
+      [
+        "\n",
+        null
+      ]
     ]
   },
   {

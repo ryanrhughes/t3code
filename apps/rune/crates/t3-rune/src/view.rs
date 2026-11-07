@@ -1188,7 +1188,11 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .on_edit(|s: &mut App| &mut s.composer)
         .on_submit(|s: &mut App, tx| s.send(false, tx))
         // Ctrl/Cmd+Return sends the alternate follow-up (queue while the agent works).
+        .on_input_change(|s: &mut App, _| s.refresh_menu())
         .on_input_key(|s: &mut App, ev: &rune::KeyEvent, tx| {
+            if !ev.mods.cmd && !ev.mods.ctrl && s.menu_key(&ev.key) {
+                return true;
+            }
             let alternate = matches!(ev.key, rune::Key::Enter)
                 && (ev.mods.cmd || ev.mods.ctrl)
                 && !ev.mods.shift;
@@ -1237,6 +1241,35 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                 .font(k.ty.small)
                 .color(look.warning_fg),
         );
+    }
+    if let Some(menu) = &s.menu {
+        let items = menu.items.iter().map(|it| {
+            let item = rune_kit::PopupItem::new(it.id.clone(), it.label.clone());
+            match &it.detail {
+                Some(d) => item.description(d.clone()),
+                None => item,
+            }
+        });
+        rune_kit::PopupList::<App>::new("composer-menu", "composer")
+            .anchored("composer", rune::Side::Top, rune::Align::Start, 6.0)
+            .width(440.0)
+            .max_height(320.0)
+            .open(true)
+            .items(items)
+            .active(Some(menu.active))
+            .empty_message(if menu.loading {
+                "Searching…"
+            } else {
+                "No matches"
+            })
+            .on_active(|s: &mut App, i| {
+                if let Some(m) = s.menu.as_mut() {
+                    m.active = i;
+                }
+            })
+            .on_choose(|s: &mut App, id: &str, _| s.pick(id))
+            .on_close(|s: &mut App| s.menu = None)
+            .build(k, layer);
     }
     let surface = col()
         .key("composer")
