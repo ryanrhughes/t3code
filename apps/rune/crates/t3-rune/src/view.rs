@@ -43,6 +43,11 @@ static PALETTE: Icon = Icon {
     view: 16.0,
     body: r#"<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="6.5" r="1" fill="currentColor"/><circle cx="9.5" cy="5.75" r="1" fill="currentColor"/><circle cx="10.5" cy="9" r="1" fill="currentColor"/>"#,
 };
+static DIFF: Icon = Icon {
+    name: "t3-diff",
+    view: 16.0,
+    body: r#"<path d="M5 3.5V9.5M2 6.5H8M3 12.5H13M10 3.5H14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#,
+};
 static TERMINAL: Icon = Icon {
     name: "t3-terminal",
     view: 16.0,
@@ -200,9 +205,25 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
             .unwrap_or_default(),
         (None, _) => "New thread".to_owned(),
     };
-    let toolbar = Toolbar::new()
-        .title(title)
-        .trailing(theme_menu(s, look, layer));
+    let diff_toggle = IconButton::new(&DIFF)
+        .variant(IconButtonVariant::GhostMuted)
+        .label(if s.diff_pane.is_open() {
+            "Hide changes"
+        } else {
+            "Show changes"
+        })
+        .shortcut("Ctrl Shift D")
+        .expanded(s.diff_pane.is_open())
+        .on_press(|s: &mut App| s.toggle_diff())
+        .build(k)
+        .key("diff-toggle");
+    let toolbar = Toolbar::new().title(title).trailing(
+        row()
+            .gap(4.0)
+            .center_y()
+            .child(diff_toggle)
+            .child(theme_menu(s, look, layer)),
+    );
     let main = col()
         .key("main")
         .w_full()
@@ -214,6 +235,11 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
     let working = s.shell.threads.iter().any(|t| t.is_working());
     SplitView::new(main)
         .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar(s, look))
+        .inspector(
+            &s.diff_pane,
+            |s: &mut App| &mut s.diff_pane,
+            diff_panel(s, look, layer),
+        )
         .toolbar(toolbar)
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(8.0)
@@ -489,6 +515,7 @@ fn shown(item: &TurnItem) -> bool {
             | "system_notice"
             | "run_interrupt_result"
             | "compaction"
+            | "checkpoint"
     )
 }
 
@@ -571,6 +598,7 @@ fn timeline(s: &App, look: &Look) -> El {
                             s.outputs.get(&item.id).map(|o| {
                                 (o.out.text.len(), o.running, o.loaded, o.error.is_some())
                             }),
+                            s.thread.as_ref().map(|t| t.checkpoints.len()),
                         );
                         rune::memo::memo(r.source_item_id.clone(), version, || {
                             let inner = col()
@@ -765,6 +793,47 @@ fn turn_item(s: &App, look: &Look, item: &TurnItem) -> El {
                     .child(command_output(o, look)),
             }
         }
+        "checkpoint" => {
+            // A turn's changed-files summary; clicking it opens that turn in the diff panel.
+            let Some(c) = item
+                .checkpoint_id
+                .as_deref()
+                .and_then(|id| s.thread.as_ref()?.checkpoints.iter().find(|c| c.id == id))
+            else {
+                return col();
+            };
+            let (Some(turn), false) = (c.app_run_ordinal, c.files.is_empty()) else {
+                return col();
+            };
+            let (adds, dels) = c
+                .files
+                .iter()
+                .fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions));
+            let files = if c.files.len() == 1 {
+                "1 file changed".to_owned()
+            } else {
+                format!("{} files changed", c.files.len())
+            };
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .cursor(rune::Cursor::Pointer)
+                .on_press(move |s: &mut App| s.open_diff(crate::DiffSel::Turn(turn)))
+                .child(rune::icon(&DIFF, 14.0).color(look.muted))
+                .child(text(files).font(k.ty.small_medium).color(look.muted))
+                .child(
+                    text(format!("+{adds}"))
+                        .font(k.ty.small)
+                        .color(k.c.success.icon),
+                )
+                .child(
+                    text(format!("−{dels}"))
+                        .font(k.ty.small)
+                        .color(look.error_fg),
+                )
+                .child(text("View changes").font(k.ty.small).color(k.c.text_accent))
+        }
         "file_change" => {
             let name = item.file_name.clone().unwrap_or_default();
             let stats = match (item.additions, item.deletions) {
@@ -888,6 +957,105 @@ fn tool_line(
         r = r.child(rune::icon(&WORKING, 11.0).color(k.c.text_accent));
     }
     r
+}
+
+/// The diff inspector: a turn picker, unified/split, and rune-kit's diff view of the patch.
+fn diff_panel(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
+    let k = &look.kit;
+    let turns = s
+        .thread
+        .as_ref()
+        .map(|t| t.diff_turns())
+        .unwrap_or_default();
+    // (label, selection); labels are unique, so a pick maps back by label.
+    let mut options: Vec<(String, crate::DiffSel)> = vec![
+        ("Latest turn".into(), crate::DiffSel::Latest),
+        ("All turns".into(), crate::DiffSel::All),
+    ];
+    for c in &turns {
+        let n = c.app_run_ordinal.unwrap_or(0);
+        let files = c.files.len();
+        options.push((
+            format!(
+                "Turn {n} · {files} file{}",
+                if files == 1 { "" } else { "s" }
+            ),
+            crate::DiffSel::Turn(n),
+        ));
+    }
+    let current = options
+        .iter()
+        .find(|(_, sel)| *sel == s.diff.sel)
+        .map(|(l, _)| l.clone());
+    let labels: Vec<String> = options.iter().map(|(l, _)| l.clone()).collect();
+    let picker = rune_kit::Select::new("diff-turn", &labels)
+        .current(current.as_deref())
+        .open(s.popup == Some(Popup::DiffTurn))
+        .on_toggle(|s: &mut App| {
+            s.popup = if s.popup == Some(Popup::DiffTurn) {
+                None
+            } else {
+                Some(Popup::DiffTurn)
+            }
+        })
+        .on_close(|s: &mut App| s.popup = None)
+        .on_choose(move |s: &mut App, label: &str, _: &mut rune::Tx| {
+            if let Some((_, sel)) = options.iter().find(|(l, _)| l == label) {
+                s.open_diff(*sel);
+            }
+        })
+        .build(k, layer)
+        .key("diff-turn-picker");
+    let split = s.diff.state.mode() == rune_kit::diff::DiffMode::Split;
+    let mode = Button::new(if split { "Unified" } else { "Split" })
+        .variant(ButtonVariant::Ghost)
+        .control_size(ControlSize::Small)
+        .on_press(move |s: &mut App| {
+            let next = if split {
+                rune_kit::diff::DiffMode::Unified
+            } else {
+                rune_kit::diff::DiffMode::Split
+            };
+            s.diff.state.set_mode(next);
+        })
+        .build(k)
+        .key("diff-mode");
+    let header = row()
+        .w_full()
+        .px(12.0)
+        .py(8.0)
+        .gap(8.0)
+        .center_y()
+        .child(picker)
+        .child(el().grow(1.0))
+        .child(mode);
+    let note = |t: &str| {
+        col()
+            .w_full()
+            .grow(1.0)
+            .center()
+            .child(text(t.to_owned()).font(k.ty.ui).color(look.muted))
+    };
+    let body = if let Some(e) = &s.diff.error {
+        note(&format!("Couldn't load the diff: {e}"))
+    } else if turns.is_empty() {
+        note("No changes in this thread yet")
+    } else if s.diff.loading && s.diff.state.files().is_empty() {
+        note("Loading changes…")
+    } else if s.diff.state.files().is_empty() {
+        note("No changes in this turn")
+    } else {
+        rune_kit::diff::DiffView::new(|s: &App| &s.diff.state, |s: &mut App| &mut s.diff.state)
+            .key("diff-view")
+            .build(s, k)
+    };
+    col()
+        .key("diff-panel")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .child(header)
+        .child(col().w_full().grow(1.0).min_h(0.0).child(body))
 }
 
 /// An expanded command's output: styled like the web's panel, scrolled to its end while it runs.

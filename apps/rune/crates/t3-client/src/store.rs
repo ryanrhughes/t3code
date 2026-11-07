@@ -139,6 +139,7 @@ pub struct ThreadState {
     pub thread: ThreadShell,
     pub runs: Vec<Run>,
     pub provider_turns: Vec<ProviderTurn>,
+    pub checkpoints: Vec<Checkpoint>,
     pub runtime_requests: Vec<RuntimeRequest>,
     /// Local turn items, by id.
     pub turn_items: Vec<TurnItem>,
@@ -156,6 +157,7 @@ impl ThreadState {
             thread: p.thread,
             runs: p.runs,
             provider_turns: p.provider_turns,
+            checkpoints: p.checkpoints,
             runtime_requests: p.runtime_requests,
             turn_items: p.turn_items,
             visible: p.visible_turn_items,
@@ -183,6 +185,7 @@ impl ThreadState {
             ThreadEvent::ProviderTurn(turn) => {
                 upsert_rev(&mut self.provider_turns, turn, |t| &t.id)
             }
+            ThreadEvent::Checkpoint(c) => upsert_rev(&mut self.checkpoints, c, |c| &c.id),
             ThreadEvent::TurnItem(item) => {
                 let interrupt = item.kind == "run_interrupt_request";
                 let visible = self.is_visible(&item);
@@ -313,6 +316,21 @@ impl ThreadState {
 
     pub fn is_working(&self) -> bool {
         self.active_run().is_some() || self.thread.is_working()
+    }
+
+    /// Turns that captured a checkpoint, newest first: what a diff can be taken over.
+    pub fn diff_turns(&self) -> Vec<&Checkpoint> {
+        let mut turns: Vec<_> = self
+            .checkpoints
+            .iter()
+            .filter(|c| c.app_run_ordinal.is_some() && c.run_id.is_some())
+            .collect();
+        turns.sort_by(|a, b| {
+            b.app_run_ordinal
+                .cmp(&a.app_run_ordinal)
+                .then_with(|| b.captured_at.cmp(&a.captured_at))
+        });
+        turns
     }
 
     /// The pending request a turn item asks about, if it's still open.

@@ -2,7 +2,7 @@
 //! protocol code the UI uses: launch a thread, steer and queue follow-ups while it runs, accept
 //! approvals, answer questions, then print how the timeline landed.
 //! `cargo run -p t3-client --example turn -- [showcase|approval|question|multi-turn]`.
-//! Sandbox servers only: it starts turns. Uses the saved pairing.
+//! Sandbox servers only: it starts turns, in the server's scratch project. Uses the saved pairing.
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -69,14 +69,32 @@ fn main() -> anyhow::Result<()> {
     };
 
     wait("the shell", 15, &|s| s.shell.loaded)?;
-    let project = seen
+    // Turns end with a checkpoint (a git ref in the project's repo), so test turns run in the
+    // server's scratch project, never in a real repository someone works in.
+    let (tx, rx) = std::sync::mpsc::channel();
+    handle.call("projects.ensureScratch", json!({}), move |r| {
+        drop(tx.send(r))
+    });
+    let scratch = rx
+        .recv_timeout(Duration::from_secs(15))?
+        .map_err(anyhow::Error::msg)?;
+    let project = scratch["projectId"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("no scratch project"))?
+        .to_owned();
+    std::thread::sleep(Duration::from_millis(500));
+    let root = seen
         .lock()
         .unwrap()
         .shell
-        .sidebar_projects()
-        .first()
-        .map(|p| p.id.clone())
-        .ok_or_else(|| anyhow::anyhow!("no project"))?;
+        .project(&project)
+        .map(|p| p.workspace_root.clone())
+        .unwrap_or_default();
+    println!("scratch project {project} at {root:?}");
+    anyhow::ensure!(
+        root.contains("/.t3/"),
+        "the scratch project isn't under a T3 home: {root:?}"
+    );
     let model = ModelSelection {
         instance_id: "devReplay".into(),
         model: scenario.clone(),

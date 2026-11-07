@@ -49,6 +49,41 @@ pub enum Popup {
     Model,
     Theme,
     Project,
+    DiffTurn,
+}
+
+/// Which changes the diff panel shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DiffSel {
+    /// The newest turn's changes, following new turns as they land.
+    Latest,
+    /// One turn's changes, by its checkpoint turn count.
+    Turn(u64),
+    /// Everything since the thread began.
+    All,
+}
+
+pub struct DiffPanel {
+    pub sel: DiffSel,
+    pub state: rune_kit::diff::DiffState,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// The (thread, from, to) range on screen, so a reload only happens when it changes.
+    loaded: Option<(String, u64, u64)>,
+    seq: u64,
+}
+
+impl Default for DiffPanel {
+    fn default() -> Self {
+        DiffPanel {
+            sel: DiffSel::Latest,
+            state: rune_kit::diff::DiffState::new(Vec::new()),
+            loading: false,
+            error: None,
+            loaded: None,
+            seq: 0,
+        }
+    }
 }
 
 pub struct App {
@@ -62,6 +97,9 @@ pub struct App {
     pub looks: theme::Looks,
     pub shell: ShellState,
     pub sidebar: PaneState,
+    /// The diff inspector beside the thread.
+    pub diff_pane: PaneState,
+    pub diff: DiffPanel,
     pub collapsed: HashSet<String>,
     /// The open thread, or a draft in `draft_project` when None.
     pub selected: Option<String>,
@@ -171,6 +209,8 @@ impl App {
             looks,
             shell: ShellState::default(),
             sidebar: PaneState::new(276.0).range(200.0, 520.0),
+            diff_pane: PaneState::new(620.0).range(380.0, 1200.0).collapsed(),
+            diff: DiffPanel::default(),
             collapsed: HashSet::new(),
             selected: None,
             draft_project: None,
@@ -293,14 +333,21 @@ impl App {
                         // Opening a thread lands at its end with nothing animating in.
                         tx.settle();
                         self.thread = Some(ThreadState::from_snapshot(sequence, *projection));
+                        self.sync_diff();
                     }
                     ThreadStreamItem::Event {
                         sequence,
                         thread_id,
                         event,
                     } => {
+                        let checkpoint =
+                            matches!(event, t3_client::protocol::ThreadEvent::Checkpoint(_));
                         if let Some(t) = self.thread.as_mut() {
                             t.apply(sequence, &thread_id, event);
+                        }
+                        // A finished turn moves "latest"; the diff panel follows it.
+                        if checkpoint {
+                            self.sync_diff();
                         }
                     }
                     ThreadStreamItem::Synchronized => {
@@ -329,6 +376,10 @@ impl App {
         self.model = None;
         self.popup = None;
         self.close_outputs();
+        self.diff = DiffPanel {
+            sel: self.diff.sel,
+            ..DiffPanel::default()
+        };
         if let Some(t) = id.as_deref().and_then(|id| self.shell.thread(id)) {
             self.draft_project = Some(t.project_id.clone());
         }
@@ -582,6 +633,87 @@ impl App {
             }
         }
         self.outputs.clear();
+    }
+
+    pub fn toggle_diff(&mut self) {
+        self.diff_pane.toggle();
+        self.sync_diff();
+    }
+
+    pub fn open_diff(&mut self, sel: DiffSel) {
+        self.diff.sel = sel;
+        self.popup = None;
+        self.diff_pane.set_open(true);
+        self.sync_diff();
+    }
+
+    /// The (from, to) turn counts the selection spans in the open thread, if it has turns.
+    pub fn diff_range(&self) -> Option<(u64, u64)> {
+        let turns = self.thread.as_ref()?.diff_turns();
+        let latest = turns.first()?.app_run_ordinal?;
+        Some(match self.diff.sel {
+            DiffSel::Latest => (latest.saturating_sub(1), latest),
+            DiffSel::Turn(n) => (n.saturating_sub(1), n),
+            DiffSel::All => (0, latest),
+        })
+    }
+
+    /// Loads the selected range when the panel is open and it changed: a new selection, another
+    /// thread, or (following the latest turn) a turn that just finished.
+    pub fn sync_diff(&mut self) {
+        if !self.diff_pane.is_open() {
+            return;
+        }
+        let (Some(thread), Some((from, to))) = (
+            self.thread.as_ref().map(|t| t.thread.id.clone()),
+            self.diff_range(),
+        ) else {
+            self.diff.state.set_files(Vec::new());
+            self.diff.loaded = None;
+            return;
+        };
+        let want = (thread.clone(), from, to);
+        if self.diff.loaded.as_ref() == Some(&want) {
+            return;
+        }
+        let (Some(session), Some(handle)) = (&self.session, HANDLE.get().cloned()) else {
+            return;
+        };
+        self.diff.loaded = Some(want);
+        self.diff.loading = true;
+        self.diff.error = None;
+        self.diff.seq += 1;
+        let seq = self.diff.seq;
+        // A range from the start is the whole thread's diff; any other is a span of turns.
+        let (tag, payload) = if from == 0 {
+            (
+                "orchestration.getFullThreadDiff",
+                serde_json::json!({ "threadId": thread, "toTurnCount": to }),
+            )
+        } else {
+            (
+                "orchestration.getTurnDiff",
+                serde_json::json!({ "threadId": thread, "fromTurnCount": from, "toTurnCount": to }),
+            )
+        };
+        session.call(tag, payload, move |result| {
+            handle.update(move |s: &mut App, _| {
+                if s.diff.seq != seq {
+                    return;
+                }
+                s.diff.loading = false;
+                match result {
+                    Ok(v) => s
+                        .diff
+                        .state
+                        .set_files(rune_kit::diff::parse(v["diff"].as_str().unwrap_or(""))),
+                    Err(e) => {
+                        s.diff.error = Some(e);
+                        s.diff.loaded = None;
+                    }
+                }
+            });
+        });
     }
 
     /// Re-reads the trigger at the composer's caret after an edit and fills the menu for it.
@@ -907,6 +1039,14 @@ fn frame_counter() -> impl FnMut(&rune::FrameEncoded) {
 }
 
 fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    // Ctrl/Cmd+Shift+D shows and hides the changes, as the web's toggle.
+    if ev.mods.shift
+        && (ev.mods.cmd || ev.mods.ctrl)
+        && tx.physical_key() == Some(rune::PhysicalKeyCode::KeyD)
+    {
+        s.toggle_diff();
+        return true;
+    }
     if shell::is_sidebar_toggle(ev) {
         s.sidebar.toggle();
         return true;
@@ -979,6 +1119,28 @@ fn scene_theme(s: &mut App, theme: &str, mode: &str) {
     s.rebuild_looks();
 }
 
+/// The fixture thread with the diff panel open on the turn the capture fetched.
+fn scene_diff(s: &mut App) {
+    scene_theme(s, "omarchy", "dark");
+    let Some(raw) = std::env::var_os("T3_RUNE_FIXTURE").and_then(|p| std::fs::read(p).ok()) else {
+        return;
+    };
+    let Ok(fixture) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+        return;
+    };
+    let diff = &fixture["diff"];
+    let (Some(to), Some(patch)) = (diff["to"].as_u64(), diff["patch"].as_str()) else {
+        return;
+    };
+    s.diff.sel = DiffSel::Turn(to);
+    s.diff.state.set_files(rune_kit::diff::parse(patch));
+    s.diff.loaded = s
+        .thread
+        .as_ref()
+        .map(|t| (t.thread.id.clone(), diff["from"].as_u64().unwrap_or(0), to));
+    s.diff_pane.set_open(true);
+}
+
 /// The fixture thread with its last command expanded, showing styled output.
 fn scene_command_output(s: &mut App) {
     scene_theme(s, "omarchy", "dark");
@@ -1010,6 +1172,7 @@ fn scene_command_output(s: &mut App) {
 
 pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("command-output", scene_command_output),
+    ("diff", scene_diff),
     ("fixture", load_fixture),
     ("omarchy", |s| scene_theme(s, "omarchy", "dark")),
     ("t3-light", |s| scene_theme(s, "light", "light")),

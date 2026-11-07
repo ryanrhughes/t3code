@@ -79,6 +79,14 @@ fn every_subscription_payload_matches_the_contract() {
         item.clone(),
     );
     decodes::<c::OrchestrationGetTurnItemPayload>("getTurnItem", item);
+    decodes::<c::OrchestrationGetTurnDiffPayload>(
+        "getTurnDiff",
+        json!({ "threadId": "t1", "fromTurnCount": 2, "toTurnCount": 3 }),
+    );
+    decodes::<c::OrchestrationGetFullThreadDiffPayload>(
+        "getFullThreadDiff",
+        json!({ "threadId": "t1", "toTurnCount": 3 }),
+    );
     decodes::<c::ProjectsSearchEntriesPayload>(
         "projects.searchEntries",
         json!({ "cwd": "/repo", "query": "src/ma", "limit": 20 }),

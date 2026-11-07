@@ -393,6 +393,8 @@ pub struct TurnItem {
     // error / notices
     pub failure: Option<Failure>,
     pub message: Option<String>,
+    // checkpoint
+    pub checkpoint_id: Option<String>,
     // subagent / compaction
     pub progress: Option<String>,
     pub result: Option<String>,
@@ -463,9 +465,33 @@ pub struct ThreadProjection {
     pub thread: ThreadShell,
     pub runs: Vec<Run>,
     pub provider_turns: Vec<ProviderTurn>,
+    pub checkpoints: Vec<Checkpoint>,
     pub runtime_requests: Vec<RuntimeRequest>,
     pub turn_items: Vec<TurnItem>,
     pub visible_turn_items: Vec<ProjectedTurnItem>,
+}
+
+/// A turn's snapshot of the workspace. Those with `app_run_ordinal` are the turns a diff spans:
+/// turn N's changes are checkpoint N−1 to N (`deriveThreadCheckpointSummaries`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Checkpoint {
+    pub id: String,
+    pub run_id: Option<String>,
+    pub app_run_ordinal: Option<u64>,
+    /// `ready | missing | error | stale`.
+    pub status: String,
+    pub files: Vec<CheckpointFile>,
+    pub captured_at: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CheckpointFile {
+    pub path: String,
+    pub kind: String,
+    pub additions: u64,
+    pub deletions: u64,
 }
 
 /// One native provider turn; a run can only be steered while its active attempt has a running one.
@@ -486,6 +512,7 @@ pub enum ThreadEvent {
     Deleted,
     Run(Run),
     ProviderTurn(ProviderTurn),
+    Checkpoint(Checkpoint),
     RuntimeRequest(RuntimeRequest),
     TurnItem(TurnItem),
     Other,
@@ -504,6 +531,9 @@ impl ThreadEvent {
             }
             "run.created" | "run.updated" => {
                 decode(payload).map_or(ThreadEvent::Other, ThreadEvent::Run)
+            }
+            "checkpoint.captured" => {
+                decode(payload).map_or(ThreadEvent::Other, ThreadEvent::Checkpoint)
             }
             "provider-turn.updated" => {
                 decode(payload).map_or(ThreadEvent::Other, ThreadEvent::ProviderTurn)

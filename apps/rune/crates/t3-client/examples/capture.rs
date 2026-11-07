@@ -69,9 +69,42 @@ async fn main() -> anyhow::Result<()> {
         }
         None => vec![],
     };
+    // The newest turn that changed files, as the diff panel opens it.
+    let mut diff = Value::Null;
+    if let (Some(id), Some(snapshot)) =
+        (&thread_id, thread.iter().find(|v| v["kind"] == "snapshot"))
+    {
+        let turn = snapshot["projection"]["checkpoints"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["files"].as_array().is_some_and(|f| !f.is_empty()))
+            .filter_map(|c| c["appRunOrdinal"].as_u64())
+            .max();
+        if let Some(to) = turn {
+            let from = to - 1;
+            let (tag, payload) = if from == 0 {
+                (
+                    "orchestration.getFullThreadDiff",
+                    json!({ "threadId": id, "toTurnCount": to }),
+                )
+            } else {
+                (
+                    "orchestration.getTurnDiff",
+                    json!({ "threadId": id, "fromTurnCount": from, "toTurnCount": to }),
+                )
+            };
+            match rpc.call(tag, payload).await {
+                Ok(v) => diff = json!({ "from": from, "to": to, "patch": v["diff"] }),
+                Err(e) => println!("diff failed: {e}"),
+            }
+        }
+    }
     std::fs::write(
         &out,
-        serde_json::to_vec(&json!({ "config": config, "shell": shell, "thread": thread }))?,
+        serde_json::to_vec(
+            &json!({ "config": config, "shell": shell, "thread": thread, "diff": diff }),
+        )?,
     )?;
     println!(
         "wrote {out}: {} config, {} shell, {} thread items (thread {:?})",
