@@ -102,13 +102,27 @@ impl ShellState {
     }
 
     /// Sidebar rows for a project, newest activity first.
+    /// A project's threads in the sidebar, newest first; settled ones sit on the Settled shelf.
     pub fn project_threads(&self, project_id: &str) -> Vec<&ThreadShell> {
         let mut rows: Vec<_> = self
             .threads
             .iter()
-            .filter(|t| t.project_id == project_id && t.is_sidebar_row())
+            .filter(|t| t.project_id == project_id && t.is_sidebar_row() && !t.is_settled())
             .collect();
         rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        rows
+    }
+
+    /// The Settled shelf, as the web's `sortSettledThreads`: most recently settled first, ties
+    /// by id. A thread without `settledAt` sorts by its last update.
+    pub fn settled_threads(&self) -> Vec<&ThreadShell> {
+        let mut rows: Vec<_> = self
+            .threads
+            .iter()
+            .filter(|t| t.is_sidebar_row() && t.is_settled())
+            .collect();
+        let at = |t: &ThreadShell| t.settled_at.clone().unwrap_or_else(|| t.updated_at.clone());
+        rows.sort_by(|a, b| at(b).cmp(&at(a)).then_with(|| a.id.cmp(&b.id)));
         rows
     }
 
@@ -505,5 +519,27 @@ mod tests {
             thread: t("a")
         }));
         assert!(s.threads.is_empty());
+    }
+
+    #[test]
+    fn settled_threads_leave_their_project_for_the_shelf() {
+        let mut s = ShellState::default();
+        let t = |id: &str, settled: Option<&str>, at: Option<&str>| ThreadShell {
+            id: id.into(),
+            project_id: "p".into(),
+            settled_override: settled.map(Into::into),
+            settled_at: at.map(Into::into),
+            updated_at: "2026-11-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        s.threads = vec![
+            t("open", None, None),
+            t("kept-active", Some("active"), Some("2026-11-05T00:00:00Z")),
+            t("older", Some("settled"), Some("2026-11-02T00:00:00Z")),
+            t("newer", Some("settled"), Some("2026-11-04T00:00:00Z")),
+        ];
+        let ids = |rows: Vec<&ThreadShell>| rows.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(s.project_threads("p")), ["open", "kept-active"]);
+        assert_eq!(ids(s.settled_threads()), ["newer", "older"]);
     }
 }

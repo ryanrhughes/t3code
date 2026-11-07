@@ -312,6 +312,8 @@ enum Entry {
         status: Option<Status3>,
         age: String,
     },
+    /// The Settled shelf's header, under the projects.
+    Settled { count: usize, expanded: bool },
 }
 
 #[derive(Clone, Copy)]
@@ -326,6 +328,10 @@ fn entries(s: &App) -> Vec<Entry> {
     let mut out = Vec::new();
     for p in s.shell.sidebar_projects() {
         let threads = s.shell.project_threads(&p.id);
+        // As the web's folders: one whose threads all settled goes, unless it's pinned.
+        if threads.is_empty() && p.pinned_at.is_none() {
+            continue;
+        }
         let collapsed = s.collapsed.contains(&p.id);
         out.push(Entry::Project {
             id: p.id.clone(),
@@ -336,30 +342,47 @@ fn entries(s: &App) -> Vec<Entry> {
         if collapsed {
             continue;
         }
-        for t in threads {
-            let status = if t.needs_attention() {
-                Some(Status3::Attention)
-            } else if t.is_working() {
-                Some(Status3::Busy)
-            } else {
-                None
-            };
-            let detail = match (
-                status,
-                t.activity_run_started_at.as_deref().and_then(parse_iso),
-            ) {
-                (Some(Status3::Busy), Some(start)) => elapsed(s.clock - start),
-                _ => age(&t.updated_at, now),
-            };
-            out.push(Entry::Thread {
-                id: t.id.clone(),
-                title: t.title.clone(),
-                status,
-                age: detail,
-            });
-        }
+        out.extend(threads.into_iter().map(|t| thread_entry(s, t, now)));
+    }
+    let settled = s.shell.settled_threads();
+    if !settled.is_empty() {
+        let expanded = s.prefs.settled_expanded;
+        out.push(Entry::Settled {
+            count: settled.len(),
+            expanded,
+        });
+        // A closed shelf still shows the open thread, as the web's does.
+        out.extend(
+            settled
+                .into_iter()
+                .filter(|t| expanded || s.selected.as_deref() == Some(t.id.as_str()))
+                .map(|t| thread_entry(s, t, now)),
+        );
     }
     out
+}
+
+fn thread_entry(s: &App, t: &t3_client::protocol::ThreadShell, now: i64) -> Entry {
+    let status = if t.needs_attention() {
+        Some(Status3::Attention)
+    } else if t.is_working() {
+        Some(Status3::Busy)
+    } else {
+        None
+    };
+    let detail = match (
+        status,
+        t.activity_run_started_at.as_deref().and_then(parse_iso),
+    ) {
+        (Some(Status3::Busy), Some(start)) => elapsed(s.clock - start),
+        _ => age(&t.updated_at, now),
+    };
+    Entry::Thread {
+        id: t.id.clone(),
+        title: t.title.clone(),
+        status,
+        age: detail,
+    }
 }
 
 fn sidebar(s: &App, look: &Look) -> El {
@@ -431,6 +454,7 @@ fn sidebar(s: &App, look: &Look) -> El {
             move |_: &App, i| match &key_rows[i] {
                 Entry::Project { id, .. } => Cow::Owned(format!("p:{id}")),
                 Entry::Thread { id, .. } => Cow::Owned(format!("t:{id}")),
+                Entry::Settled { .. } => Cow::Borrowed("shelf:settled"),
             },
             move |_: &App, i| entry_row(&build_rows[i], selected.as_deref(), &kit),
         )
@@ -464,6 +488,11 @@ fn entry_row(e: &Entry, selected: Option<&str>, k: &Kit) -> El {
                 )
                 .build(k)
         }
+        Entry::Settled { count, expanded } => SidebarHeader::new("Settled")
+            .count(*count)
+            .collapsed(!expanded)
+            .on_toggle(|s: &mut App, _| s.prefs.toggle_settled())
+            .build(k),
         Entry::Thread {
             id,
             title,

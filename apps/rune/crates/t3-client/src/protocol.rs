@@ -232,6 +232,8 @@ pub struct ThreadShell {
     pub updated_at: String,
     pub archived_at: Option<String>,
     pub settled_at: Option<String>,
+    /// `"settled"` puts the thread on the sidebar's Settled shelf; `"active"` keeps it out.
+    pub settled_override: Option<String>,
     pub deleted_at: Option<String>,
     pub pinned_at: Option<String>,
 }
@@ -242,6 +244,10 @@ impl ThreadShell {
         self.deleted_at.is_none()
             && self.lineage.relationship_to_parent.as_deref() != Some("subagent")
             && self.lineage.side_chat != Some(true)
+    }
+
+    pub fn is_settled(&self) -> bool {
+        self.settled_override.as_deref() == Some("settled")
     }
 
     pub fn is_working(&self) -> bool {

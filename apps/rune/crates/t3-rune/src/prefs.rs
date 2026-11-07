@@ -14,6 +14,8 @@ pub struct Prefs {
     pub adopted_default_theme: Option<String>,
     /// What a message sent while an agent works does by default: `steer | queue`.
     pub follow_up: String,
+    /// The sidebar's Settled shelf is open; closed by default, as the web's.
+    pub settled_expanded: bool,
 }
 
 impl Default for Prefs {
@@ -23,6 +25,7 @@ impl Default for Prefs {
             mode: "system".into(),
             adopted_default_theme: None,
             follow_up: "steer".into(),
+            settled_expanded: false,
         }
     }
 }
@@ -79,6 +82,11 @@ impl Prefs {
         if matches!(self.theme.as_str(), "light" | "dark") && mode != "system" {
             self.theme = mode.to_owned();
         }
+        self.save();
+    }
+
+    pub fn toggle_settled(&mut self) {
+        self.settled_expanded = !self.settled_expanded;
         self.save();
     }
 
