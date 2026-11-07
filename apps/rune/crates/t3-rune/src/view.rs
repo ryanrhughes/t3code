@@ -877,6 +877,59 @@ fn turn_item(s: &App, look: &Look, item: &TurnItem) -> El {
                 ),
             )
         }
+        "todo_list" => {
+            // As the web's: a quiet "Tasks 2/5 · current step" row that opens to every step.
+            let steps = item.steps.as_deref().unwrap_or_default();
+            let done = steps.iter().filter(|st| st.status == "completed").count();
+            let current = steps
+                .iter()
+                .find(|st| st.status == "running")
+                .or_else(|| steps.iter().find(|st| st.status == "pending"));
+            let subject = match current {
+                Some(st) => format!("{done}/{} · {}", steps.len(), st.text),
+                None => format!("{done}/{}", steps.len()),
+            };
+            let id = item.id.clone();
+            let line = tool_line(look, None, "Tasks", Some(subject), item)
+                .cursor(rune::Cursor::Pointer)
+                .on_press(move |s: &mut App| {
+                    if !s.expanded.remove(&id) {
+                        s.expanded.insert(id.clone());
+                    }
+                });
+            if !s.expanded.contains(&item.id) {
+                return line;
+            }
+            let mut list = col().pl(22.0).gap(4.0);
+            if let Some(why) = item.explanation.as_deref().filter(|e| !e.is_empty()) {
+                list = list.child(text(why.to_owned()).font(k.ty.ui).color(look.muted).wrap());
+            }
+            for st in steps {
+                let (mark, color) = match st.status.as_str() {
+                    "completed" => ("✓", look.muted),
+                    "running" => ("●", look.accent),
+                    _ => ("○", look.muted),
+                };
+                list = list.child(
+                    row()
+                        .w_full()
+                        .gap(8.0)
+                        .child(text(mark.to_owned()).font(k.ty.ui).color(color))
+                        .child(
+                            text(st.text.clone())
+                                .font(k.ty.ui)
+                                .color(if st.status == "completed" {
+                                    look.muted
+                                } else {
+                                    look.text
+                                })
+                                .wrap()
+                                .shrink(),
+                        ),
+                );
+            }
+            col().w_full().gap(6.0).child(line).child(list)
+        }
         "command_execution" => {
             let cmd = item
                 .input_text()
