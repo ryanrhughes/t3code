@@ -1,5 +1,6 @@
 //! T3 Code on Rune: a native client for any T3 server (local, LAN, tailnet or tunnel).
 //! `cargo run -p t3-rune` opens the window; `-- --snap out.png --scene <name>` renders headless.
+mod files;
 mod prefs;
 mod theme;
 mod view;
@@ -63,6 +64,14 @@ pub enum DiffSel {
     All,
 }
 
+/// What the inspector beside the thread shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Inspector {
+    #[default]
+    Changes,
+    Files,
+}
+
 pub struct DiffPanel {
     pub sel: DiffSel,
     pub state: rune_kit::diff::DiffState,
@@ -97,9 +106,11 @@ pub struct App {
     pub looks: theme::Looks,
     pub shell: ShellState,
     pub sidebar: PaneState,
-    /// The diff inspector beside the thread.
+    /// The inspector beside the thread, showing the changes or the files.
     pub diff_pane: PaneState,
+    pub inspector: Inspector,
     pub diff: DiffPanel,
+    pub files: files::FilesPanel,
     pub collapsed: HashSet<String>,
     /// The open thread, or a draft in `draft_project` when None.
     pub selected: Option<String>,
@@ -152,6 +163,7 @@ pub struct CommandPalette {
 pub enum PaletteAction {
     NewThread,
     ToggleDiff,
+    ToggleFiles,
     ToggleSidebar,
     OpenThread(String),
     Theme(String),
@@ -253,7 +265,9 @@ impl App {
             shell: ShellState::default(),
             sidebar: PaneState::new(276.0).range(200.0, 520.0),
             diff_pane: PaneState::new(620.0).range(380.0, 1200.0).collapsed(),
+            inspector: Inspector::Changes,
             diff: DiffPanel::default(),
+            files: files::FilesPanel::default(),
             collapsed: HashSet::new(),
             selected: None,
             draft_project: None,
@@ -275,6 +289,8 @@ impl App {
             palette: None,
         };
         match cred {
+            // A scene draws captured data; a live session would replace it.
+            Some(_) if std::env::args().any(|a| a == "--scene") => {}
             Some(c) => app.start(c),
             // First launch on a machine that runs T3 Code: connect to it with no link. A revoked or
             // forgotten pairing lands on the pairing screen instead, so revoking sticks.
@@ -680,15 +696,29 @@ impl App {
     }
 
     pub fn toggle_diff(&mut self) {
-        self.diff_pane.toggle();
+        self.toggle_inspector(Inspector::Changes);
+    }
+
+    /// Shows `tab` in the inspector, or closes the inspector when it already shows it.
+    pub fn toggle_inspector(&mut self, tab: Inspector) {
+        let open = !(self.diff_pane.is_open() && self.inspector == tab);
+        self.inspector = tab;
+        self.diff_pane.set_open(open);
         self.sync_diff();
+        self.sync_files();
+    }
+
+    pub fn show_inspector(&mut self, tab: Inspector) {
+        self.inspector = tab;
+        self.popup = None;
+        self.diff_pane.set_open(true);
+        self.sync_diff();
+        self.sync_files();
     }
 
     pub fn open_diff(&mut self, sel: DiffSel) {
         self.diff.sel = sel;
-        self.popup = None;
-        self.diff_pane.set_open(true);
-        self.sync_diff();
+        self.show_inspector(Inspector::Changes);
     }
 
     /// The (from, to) turn counts the selection spans in the open thread, if it has turns.
@@ -705,7 +735,7 @@ impl App {
     /// Loads the selected range when the panel is open and it changed: a new selection, another
     /// thread, or (following the latest turn) a turn that just finished.
     pub fn sync_diff(&mut self) {
-        if !self.diff_pane.is_open() {
+        if !self.diff_pane.is_open() || self.inspector != Inspector::Changes {
             return;
         }
         let (Some(thread), Some((from, to))) = (
@@ -792,15 +822,27 @@ impl App {
             },
             PaletteItem {
                 group: "Actions",
-                label: if self.diff_pane.is_open() {
+                label: if self.diff_pane.is_open() && self.inspector == Inspector::Changes {
                     "Hide changes"
                 } else {
                     "Show changes"
                 }
                 .into(),
                 detail: None,
-                shortcut: Some("Ctrl Shift D"),
+                shortcut: Some("Ctrl D"),
                 action: PaletteAction::ToggleDiff,
+            },
+            PaletteItem {
+                group: "Actions",
+                label: if self.diff_pane.is_open() && self.inspector == Inspector::Files {
+                    "Hide files"
+                } else {
+                    "Show files"
+                }
+                .into(),
+                detail: None,
+                shortcut: None,
+                action: PaletteAction::ToggleFiles,
             },
             PaletteItem {
                 group: "Actions",
@@ -861,6 +903,7 @@ impl App {
         match item.action {
             PaletteAction::NewThread => self.new_thread(None),
             PaletteAction::ToggleDiff => self.toggle_diff(),
+            PaletteAction::ToggleFiles => self.toggle_inspector(Inspector::Files),
             PaletteAction::ToggleSidebar => self.sidebar.toggle(),
             PaletteAction::OpenThread(id) => self.open_thread(Some(id)),
             PaletteAction::Theme(id) => self.set_theme(&id, tx),
@@ -1170,6 +1213,7 @@ fn poll(s: &mut App, _now: f64, tx: &mut Tx) -> bool {
         s.clock = now;
         changed = true;
     }
+    s.sync_files();
     if working || !s.toasts.is_empty() {
         tx.wake_after(std::time::Duration::from_secs(1));
     }
@@ -1213,8 +1257,8 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.toggle_palette();
         return true;
     }
-    // Ctrl/Cmd+Shift+D shows and hides the changes, as the web's toggle.
-    if ev.mods.shift
+    // Ctrl/Cmd+D shows and hides the changes, as the web's `diff.toggle`.
+    if !ev.mods.shift
         && (ev.mods.cmd || ev.mods.ctrl)
         && tx.physical_key() == Some(rune::PhysicalKeyCode::KeyD)
     {
@@ -1235,6 +1279,14 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if matches!(ev.key, rune::Key::Escape) && s.popup.is_some() {
         s.popup = None;
+        return true;
+    }
+    if matches!(ev.key, rune::Key::Escape)
+        && s.diff_pane.is_open()
+        && s.inspector == Inspector::Files
+        && s.files.open.is_some()
+    {
+        s.close_file();
         return true;
     }
     let _ = tx;
@@ -1315,6 +1367,15 @@ fn scene_diff(s: &mut App) {
     s.diff_pane.set_open(true);
 }
 
+/// The Files tab over this crate's own folder, read from the disk.
+fn scene_files(s: &mut App, file: Option<&str>) {
+    scene_theme(s, "omarchy", "dark");
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    s.inspector = Inspector::Files;
+    s.diff_pane.set_open(true);
+    s.files.scene(root, &["crates", "crates/t3-rune"], file);
+}
+
 /// The fixture thread with its last command expanded, showing styled output.
 fn scene_command_output(s: &mut App) {
     scene_theme(s, "omarchy", "dark");
@@ -1350,6 +1411,10 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("palette", |s| {
         scene_theme(s, "omarchy", "dark");
         s.toggle_palette();
+    }),
+    ("files", |s| scene_files(s, None)),
+    ("file", |s| {
+        scene_files(s, Some("crates/t3-rune/src/files.rs"))
     }),
     ("fixture", load_fixture),
     ("omarchy", |s| scene_theme(s, "omarchy", "dark")),

@@ -15,7 +15,7 @@ use t3_client::protocol::{ModelSelection, TurnItem};
 use t3_client::session::Status;
 
 use crate::theme::{self, Look};
-use crate::{App, Popup, Screen};
+use crate::{App, Inspector, Popup, Screen};
 
 static PLUS: Icon = Icon {
     name: "t3-plus",
@@ -43,6 +43,12 @@ static PALETTE: Icon = Icon {
     view: 16.0,
     body: r#"<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="6" cy="6.5" r="1" fill="currentColor"/><circle cx="9.5" cy="5.75" r="1" fill="currentColor"/><circle cx="10.5" cy="9" r="1" fill="currentColor"/>"#,
 };
+static BACK: Icon = Icon {
+    name: "t3-back",
+    view: 16.0,
+    body: r#"<path d="M10 3.5L5.5 8L10 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
+};
+
 static DIFF: Icon = Icon {
     name: "t3-diff",
     view: 16.0,
@@ -208,22 +214,35 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
             .unwrap_or_default(),
         (None, _) => "New thread".to_owned(),
     };
+    let showing = |tab| s.diff_pane.is_open() && s.inspector == tab;
     let diff_toggle = IconButton::new(&DIFF)
         .variant(IconButtonVariant::GhostMuted)
-        .label(if s.diff_pane.is_open() {
+        .label(if showing(Inspector::Changes) {
             "Hide changes"
         } else {
             "Show changes"
         })
-        .shortcut("Ctrl Shift D")
-        .expanded(s.diff_pane.is_open())
+        .shortcut("Ctrl D")
+        .expanded(showing(Inspector::Changes))
         .on_press(|s: &mut App| s.toggle_diff())
         .build(k)
         .key("diff-toggle");
+    let files_toggle = IconButton::new(&glyphs::FOLDER)
+        .variant(IconButtonVariant::GhostMuted)
+        .label(if showing(Inspector::Files) {
+            "Hide files"
+        } else {
+            "Show files"
+        })
+        .expanded(showing(Inspector::Files))
+        .on_press(|s: &mut App| s.toggle_inspector(Inspector::Files))
+        .build(k)
+        .key("files-toggle");
     let toolbar = Toolbar::new().title(title).trailing(
         row()
             .gap(4.0)
             .center_y()
+            .child(files_toggle)
             .child(diff_toggle)
             .child(theme_menu(s, look, layer)),
     );
@@ -241,7 +260,7 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
         .inspector(
             &s.diff_pane,
             |s: &mut App| &mut s.diff_pane,
-            diff_panel(s, look, layer),
+            inspector(s, look, layer),
         )
         .toolbar(toolbar)
         .titlebar_inset(cx.titlebar_inset())
@@ -1070,6 +1089,282 @@ fn palette(s: &App, look: &Look) -> El {
                 .px(16.0)
                 .child(card),
         )
+}
+
+/// The inspector beside the thread: Changes or Files, picked by a tab row.
+fn inspector(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
+    let k = &look.kit;
+    let tab = s.inspector;
+    let tabs = rune_kit::SegmentedControl::new(
+        &["Changes", "Files"],
+        Some(usize::from(tab == Inspector::Files)),
+    )
+    .label("Inspector")
+    .fit()
+    .on_pick(|s: &mut App, i, _: &mut rune::Tx| {
+        s.show_inspector(if i == 1 {
+            Inspector::Files
+        } else {
+            Inspector::Changes
+        })
+    })
+    .build(k)
+    .key("inspector-tabs");
+    let body = match tab {
+        Inspector::Changes => diff_panel(s, look, layer),
+        Inspector::Files => files_panel(s, look),
+    };
+    col()
+        .key("inspector")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .child(row().w_full().px(12.0).pt(8.0).child(tabs))
+        .child(col().w_full().grow(1.0).min_h(0.0).child(body))
+}
+
+/// The Files tab: the workspace tree, or the open file's source with a way back to it.
+fn files_panel(s: &App, look: &Look) -> El {
+    let k = &look.kit;
+    let note = |t: String| {
+        col()
+            .w_full()
+            .grow(1.0)
+            .center()
+            .padding(16.0)
+            .child(text(t).font(k.ty.ui).color(look.muted).wrap())
+    };
+    if s.files.cwd.is_none() {
+        return note("Open a thread to browse its files".into());
+    }
+    if let Some(f) = &s.files.open {
+        return file_view(f, look);
+    }
+    if let Some(e) = s.files.errors.get("") {
+        return note(format!("Couldn't list the files: {e}"));
+    }
+    if !s.files.root_loaded() {
+        return note("Loading files…".into());
+    }
+    if s.files.tree.is_empty() {
+        return note("This folder is empty".into());
+    }
+    let (muted, faint) = (look.muted, look.muted.alpha(0.6));
+    let ignored = s.files.ignored.clone();
+    let tree = rune_kit::Tree::new(
+        |s: &App| &s.files.tree,
+        |s: &mut App| &mut s.files.tree,
+        rune_kit::FileNode::label,
+    )
+    .name("Files")
+    .row(move |n, r| {
+        if crate::files::is_placeholder(r.id) {
+            return rune_kit::TreeItem::new(n.name.clone()).label_color(muted);
+        }
+        let item = rune_kit::TreeItem::file(n, r);
+        if ignored.contains(&n.path) {
+            item.label_color(faint).icon_color(faint)
+        } else {
+            item
+        }
+    })
+    .on_select(|s: &mut App, id, _| {
+        if s.files.tree.get(id).is_some_and(|n| !n.dir) {
+            s.open_file(id);
+        }
+    })
+    .build(s, k);
+    col()
+        .key("files-panel")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .px(8.0)
+        .py(8.0)
+        .child(tree.grow(1.0).min_h(0.0))
+}
+
+const SOURCE_LINE: f32 = 20.0;
+
+/// A file's source: a back button and its path, then every line numbered and highlighted. Rows
+/// are virtual, so a 20,000-line file costs what the visible lines do.
+fn file_view(f: &crate::files::OpenFile, look: &Look) -> El {
+    let k = &look.kit;
+    let back = IconButton::new(&BACK)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Small)
+        .label("Back to files")
+        .shortcut("Esc")
+        .on_press(|s: &mut App| s.close_file())
+        .build(k)
+        .key("file-back");
+    let (dir, name) = f.path.rsplit_once('/').unwrap_or(("", &f.path));
+    let path = row()
+        .gap(6.0)
+        .center_y()
+        .min_w(0.0)
+        .shrink()
+        .child(
+            text(name.to_owned())
+                .font(k.ty.ui)
+                .color(look.text)
+                .truncate(),
+        )
+        .child(
+            text(dir.to_owned())
+                .font(k.ty.small)
+                .color(look.muted)
+                .truncate()
+                .shrink(),
+        );
+    let mut header = row()
+        .w_full()
+        .px(8.0)
+        .py(6.0)
+        .gap(4.0)
+        .center_y()
+        .child(back)
+        .child(path);
+    if f.is_markdown() {
+        let source = f.source;
+        header = header.child(el().grow(1.0)).child(
+            Button::new(if source { "Preview" } else { "Source" })
+                .variant(ButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .on_press(move |s: &mut App| {
+                    if let Some(f) = s.files.open.as_mut() {
+                        f.source = !source;
+                    }
+                })
+                .build(k)
+                .key("file-source"),
+        );
+    }
+    let note = |t: String, c| {
+        col()
+            .w_full()
+            .grow(1.0)
+            .center()
+            .padding(16.0)
+            .child(text(t).font(k.ty.ui).color(c).wrap())
+    };
+    let body = if let Some(e) = &f.error {
+        note(format!("Couldn't open the file: {e}"), look.error_fg)
+    } else if f.loading {
+        note("Loading…".into(), look.muted)
+    } else if f.is_markdown() && !f.source {
+        col()
+            .key("file-markdown")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(
+                col()
+                    .w_full()
+                    .px(16.0)
+                    .py(12.0)
+                    .child(Markdown::new(f.text.to_string()).selectable(true).build(k)),
+            )
+    } else {
+        source_lines(f, look)
+    };
+    let mut panel = col()
+        .key("file-view")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .child(header)
+        .child(body);
+    if f.truncated {
+        panel = panel.child(
+            row().w_full().px(12.0).py(6.0).child(
+                text(format!(
+                    "Showing the start of a {} file",
+                    byte_size(f.byte_length)
+                ))
+                .font(k.ty.small)
+                .color(look.muted),
+            ),
+        );
+    }
+    panel
+}
+
+fn source_lines(f: &crate::files::OpenFile, look: &Look) -> El {
+    let k = &look.kit;
+    let syntax = rune_kit::syntax::SyntaxTheme::from_kit(k);
+    let (text_src, lines, highlights) = (f.text.clone(), f.lines.clone(), f.highlights.clone());
+    let digits = lines.len().to_string().len() as f32;
+    let gutter = 12.0 + digits * 7.5;
+    let (fg, faint, mono) = (look.code_fg, look.muted.alpha(0.7), k.ty.mono);
+    let rows = col()
+        .key("file-lines")
+        .w_full()
+        .py(4.0)
+        .growth(GrowthSpec::default())
+        .virtual_rows(
+            lines.len(),
+            SOURCE_LINE,
+            |_: &App, i| Cow::Owned(i.to_string()),
+            move |_: &App, i| {
+                let (a, b) = lines[i];
+                let line = text_src[a..b].trim_end_matches('\r').to_owned();
+                // Highlights are sorted and disjoint: start at the first that ends past `a`.
+                let first = highlights.partition_point(|(r, _)| r.end <= a);
+                let mut spans = Vec::new();
+                for (r, paint) in &highlights[first..] {
+                    if r.start >= b {
+                        break;
+                    }
+                    let (s0, s1) = (r.start.max(a) - a, r.end.min(b) - a);
+                    if s0 < s1 && s1 <= line.len() {
+                        let mut span = rune::Span::new(s0, s1);
+                        span.color = Some(syntax.paint(*paint));
+                        spans.push(span);
+                    }
+                }
+                row()
+                    .w_full()
+                    .h(SOURCE_LINE)
+                    .center_y()
+                    .child(
+                        text((i + 1).to_string())
+                            .font(mono)
+                            .color(faint)
+                            .w(gutter)
+                            .pr(12.0)
+                            .align(rune::Align::End),
+                    )
+                    .child(
+                        rune::rich(line, spans)
+                            .font(mono)
+                            .color(fg)
+                            .truncate()
+                            .shrink(),
+                    )
+            },
+        );
+    col()
+        .key("file-scroll")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .fill(look.code_bg)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(rows)
+}
+
+fn byte_size(n: u64) -> String {
+    match n {
+        n if n >= 1 << 20 => format!("{:.1} MB", n as f64 / (1 << 20) as f64),
+        n if n >= 1 << 10 => format!("{} KB", n >> 10),
+        n => format!("{n} B"),
+    }
 }
 
 /// The diff inspector: a turn picker, unified/split, and rune-kit's diff view of the patch.
