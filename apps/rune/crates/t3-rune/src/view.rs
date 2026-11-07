@@ -2054,7 +2054,10 @@ fn question(s: &App, look: &Look, item: &TurnItem) -> El {
 fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     let k = &look.kit;
     let working = s.thread.as_ref().is_some_and(|t| t.is_working());
-    let placeholder = if working {
+    let ready_plan = s.ready_plan().is_some();
+    let placeholder = if ready_plan && !working {
+        "Return implements the plan, or type to refine it…"
+    } else if working {
         "Steer the agent…"
     } else if s.selected.is_none() {
         "Describe a task…"
@@ -2109,6 +2112,9 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .gap(8.0)
         .px(4.0)
         .pt(2.0);
+    if let Some(banner) = crate::plan::banner(s, look) {
+        field = field.child(banner);
+    }
     if let Some(chips) = crate::attach::chips(s, look) {
         field = field.child(chips);
     }
@@ -2146,7 +2152,19 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .center_y()
         .flex_wrap()
         .child(attach)
-        .child(model_menu(s, look, layer));
+        .child(model_menu(s, look, layer))
+        .child(
+            Button::new(if s.plan_mode() { "Plan mode" } else { "Plan" })
+                .variant(if s.plan_mode() {
+                    ButtonVariant::Neutral
+                } else {
+                    ButtonVariant::Ghost
+                })
+                .control_size(ControlSize::Small)
+                .on_press(|s: &mut App| s.toggle_plan_mode())
+                .build(k)
+                .key("plan-toggle"),
+        );
     if s.selected.is_none() {
         controls = controls.child(project_menu(s, look, layer));
     }

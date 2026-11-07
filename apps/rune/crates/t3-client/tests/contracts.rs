@@ -76,6 +76,17 @@ fn every_command_the_client_sends_matches_the_contract() {
         "attachments.createUploadUrl",
         json!({ "type": "image", "name": "shot.png", "mimeType": "image/png", "sizeBytes": 10 }),
     );
+    let mut implement = protocol::message_dispatch(
+        "t1",
+        "PLEASE IMPLEMENT THIS PLAN:\nx",
+        None,
+        DispatchMode::Auto,
+    );
+    protocol::with_plan(&mut implement, "t1", "plan-1");
+    decodes::<Dispatch>("message.dispatch (implement a plan)", implement);
+    let mut planned = protocol::launch_thread("p1", "plan it", &model, "full-access");
+    planned["interactionMode"] = json!("plan");
+    decodes::<c::OrchestrationLaunchThreadPayload>("launchThread (plan mode)", planned);
     // The sidebar's thread actions.
     for (kind, extra) in [
         ("thread.pin", json!({})),

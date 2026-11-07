@@ -4,6 +4,7 @@ mod actions;
 mod attach;
 mod files;
 mod notify;
+mod plan;
 mod prefs;
 mod settings;
 mod theme;
@@ -179,6 +180,8 @@ pub struct App {
     /// A sidebar thread's context menu.
     pub thread_menu: Option<actions::ThreadMenu>,
     pub rename: Option<actions::Rename>,
+    /// Plan mode for the next new thread (an open thread keeps its own on the server).
+    pub draft_plan: bool,
     /// Files on their way into the next message.
     pub attachments: Vec<attach::Attachment>,
     next_attachment: u64,
@@ -371,6 +374,7 @@ impl App {
             palette: None,
             thread_menu: None,
             rename: None,
+            draft_plan: false,
             attachments: Vec::new(),
             next_attachment: 0,
             archived: None,
@@ -794,6 +798,10 @@ impl App {
     pub fn send(&mut self, alternate: bool, tx: &mut Tx) {
         let text = self.composer.text.trim().to_owned();
         if text.is_empty() {
+            // Sending nothing while a plan waits implements it, as the web's composer does.
+            if self.ready_plan().is_some() {
+                self.implement_plan(tx);
+            }
             return;
         }
         let Some(session) = self.session() else {
@@ -845,6 +853,9 @@ impl App {
                     .map_or("full-access".to_owned(), |c| c.default_runtime_mode());
                 let mut input = protocol::launch_thread(&project, &text, &model, &runtime);
                 protocol::attach(&mut input, &files);
+                if self.draft_plan {
+                    input["interactionMode"] = "plan".into();
+                }
                 session.launch(input);
             }
         }
@@ -1655,6 +1666,14 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if ev.is_command('n') && !ev.mods.shift {
         s.new_thread(None);
+        return true;
+    }
+    // Ctrl/Cmd+Shift+A switches plan mode, as the web's `composer.mode`.
+    if ev.mods.shift
+        && (ev.mods.cmd || ev.mods.ctrl)
+        && tx.physical_key() == Some(rune::PhysicalKeyCode::KeyA)
+    {
+        s.toggle_plan_mode();
         return true;
     }
     if ev.is_command(',') {

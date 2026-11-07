@@ -331,6 +331,8 @@ pub struct ThreadShell {
     pub last_error_class: Option<String>,
     /// The user stopped the latest run, so finishing it isn't news.
     pub latest_run_stop_requested: Option<bool>,
+    /// A proposed plan waits for the user to implement or refine it.
+    pub has_actionable_proposed_plan: Option<bool>,
     /// Outer `None`: an older server that doesn't send it; `Some(None)`: sent as null.
     #[serde(deserialize_with = "present")]
     pub latest_run_completed_at: Option<Option<String>>,
@@ -490,6 +492,7 @@ pub struct TurnItem {
     /// `ChatAttachment`s on a message: `{type, id, name, mimeType, sizeBytes}`.
     pub attachments: Option<Vec<Value>>,
     // proposed_plan / todo_list
+    pub plan_id: Option<String>,
     pub markdown: Option<String>,
     pub steps: Option<Vec<PlanStep>>,
     pub explanation: Option<String>,
@@ -840,6 +843,25 @@ pub fn attach(cmd: &mut Value, attachments: &[Value]) {
     *slot = Value::Array(attachments.to_vec());
 }
 
+/// `PLAN_IMPLEMENTATION_PROMPT_PREFIX`: what "Implement" sends ahead of the plan.
+pub const PLAN_PROMPT_PREFIX: &str = "PLEASE IMPLEMENT THIS PLAN:\n";
+
+/// `proposedPlanTitle`: the plan's first Markdown heading.
+pub fn plan_title(markdown: &str) -> Option<String> {
+    markdown.lines().find_map(|line| {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let rest = line.trim_start_matches(' ');
+        let hashes = rest.len() - rest.trim_start_matches('#').len();
+        let text = rest[hashes..].strip_prefix([' ', '\t'])?.trim();
+        (indent <= 3 && (1..=6).contains(&hashes) && !text.is_empty()).then(|| text.to_owned())
+    })
+}
+
+/// Marks a `message.dispatch` as implementing a thread's proposed plan.
+pub fn with_plan(cmd: &mut Value, thread_id: &str, plan_id: &str) {
+    cmd["sourcePlanRef"] = json!({ "threadId": thread_id, "planId": plan_id });
+}
+
 pub fn launch_thread(
     project_id: &str,
     text: &str,
@@ -908,6 +930,17 @@ pub fn set_model(thread_id: &str, model: &ModelSelection) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plan_is_titled_by_its_first_heading() {
+        assert_eq!(
+            plan_title("intro\n## Add login\n# Later"),
+            Some("Add login".into())
+        );
+        assert_eq!(plan_title("   ### Indented"), Some("Indented".into()));
+        assert_eq!(plan_title("    # Code block"), None);
+        assert_eq!(plan_title("#Not a heading\n#######Seven"), None);
+    }
 
     #[test]
     fn setting_a_model_option_replaces_only_that_option() {

@@ -1,7 +1,9 @@
 //! Drives a real turn on a dev server's free `Replay (dev)` provider through the same session and
 //! protocol code the UI uses: launch a thread, steer and queue follow-ups while it runs, accept
 //! approvals, answer questions, then print how the timeline landed.
-//! `cargo run -p t3-client --example turn -- [showcase|approval|question|multi-turn]`.
+//! `cargo run -p t3-client --example turn -- [showcase|approval|question|multi-turn|plan-haiku]`.
+//! `plan-haiku` is the one paid scenario: Claude Haiku in plan mode, since only a real provider
+//! proposes a plan. It stops once the plan is ready, for the client to implement.
 //! Sandbox servers only: it starts turns, in a `rune-turns` project under the server's data
 //! folder. Uses the saved pairing.
 use std::sync::{Arc, Mutex};
@@ -108,6 +110,9 @@ fn main() -> anyhow::Result<()> {
         root.contains("/.t3/"),
         "the test project isn't under a T3 home: {root:?}"
     );
+    if scenario == "plan-haiku" {
+        return plan_with_haiku(&handle, &seen, &project, &wait);
+    }
     let model = ModelSelection {
         instance_id: "devReplay".into(),
         model: scenario.clone(),
@@ -254,5 +259,44 @@ fn main() -> anyhow::Result<()> {
     if !s.failures.is_empty() {
         println!("failures: {:?}", s.failures);
     }
+    Ok(())
+}
+
+type Wait<'a> = dyn Fn(&str, u64, &dyn Fn(&Seen) -> bool) -> anyhow::Result<()> + 'a;
+
+/// Launches a plan-mode thread on the cheapest real model and waits for its proposed plan.
+fn plan_with_haiku(
+    handle: &session::SessionHandle,
+    seen: &Arc<Mutex<Seen>>,
+    project: &str,
+    wait: &Wait,
+) -> anyhow::Result<()> {
+    let model = ModelSelection {
+        instance_id: "claudeAgent".into(),
+        model: "claude-haiku-5-5".into(),
+        options: None,
+    };
+    let mut input = protocol::launch_thread(
+        project,
+        "Plan adding a README.md that says hello in one line. Keep the plan to three short steps.",
+        &model,
+        "full-access",
+    );
+    input["interactionMode"] = json!("plan");
+    handle.launch(input);
+    wait("the launch", 30, &|s| {
+        s.launched.is_some() || !s.failures.is_empty()
+    })?;
+    let id = seen.lock().unwrap().launched.clone();
+    let Some(id) = id else {
+        anyhow::bail!("launch failed: {:?}", seen.lock().unwrap().failures);
+    };
+    println!("launched {id} (plan mode, claude-haiku-5-5)");
+    wait("a proposed plan", 240, &|s| {
+        s.shell
+            .thread(&id)
+            .is_some_and(|t| t.has_actionable_proposed_plan == Some(true))
+    })?;
+    println!("plan ready on {id}");
     Ok(())
 }
