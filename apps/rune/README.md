@@ -18,7 +18,8 @@ For a remote server, paste a link from Settings → Connections or `t3 pair`. Th
 
 ## Layout
 
-- `crates/t3-client`: pairing, Effect RPC over WebSocket, the contract types the client reads, and the shell and thread reducers. It has no UI dependency.
+- `crates/t3-contracts`: Rust types for all 211 WebSocket RPCs, generated at build time from `schema/contracts.json`, which `scripts/export-contract-schemas.ts` writes from `packages/contracts`. Unions accept members the contract doesn't list, as the TypeScript client's `ForwardCompatibleUnion` does.
+- `crates/t3-client`: pairing, Effect RPC over WebSocket, the lenient types the UI reads, and the shell and thread reducers. Its `tests/contracts.rs` checks every command it sends against the generated contract types. It has no UI dependency.
 - `crates/t3-theme`: the web's palette derivation (`apps/web/src/themePalette.ts`), checked byte-for-byte against the real TypeScript by `tests/parity.rs`.
 - `crates/t3-rune`: the UI.
 
@@ -26,10 +27,13 @@ For a remote server, paste a link from Settings → Connections or `t3 pair`. Th
 
 ```sh
 cargo test -p t3-client -p t3-theme
+# After upstream contract changes, refresh the schema; a stale one fails CI:
+node apps/rune/scripts/export-contract-schemas.ts
 # Regenerate theme assets and parity fixtures from the web code (needs the repo's node_modules):
 node apps/rune/scripts/export-builtin-themes.ts && node apps/rune/scripts/theme-reference.ts
 # Headless render from captured wire data, no window and no network:
 cargo run -p t3-client --example capture -- /tmp/fixture.json      # read-only; uses the saved pairing
+T3_WIRE_FIXTURE=/tmp/fixture.json cargo test -p t3-client --test contracts   # real traffic vs. the contract
 T3_RUNE_FIXTURE=/tmp/fixture.json cargo run -p t3-rune -- --snap out.png --scene omarchy --size 1280x820
 ```
 

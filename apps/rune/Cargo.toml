@@ -2,7 +2,7 @@
 # Standalone workspace; nothing else in the repo builds it.
 [workspace]
 resolver = "3"
-members = ["crates/t3-theme", "crates/t3-client", "crates/t3-rune"]
+members = ["crates/t3-theme", "crates/t3-contracts", "crates/t3-client", "crates/t3-rune"]
 
 [workspace.package]
 edition = "2024"
@@ -27,6 +27,7 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 t3-theme = { path = "crates/t3-theme" }
 t3-client = { path = "crates/t3-client" }
+t3-contracts = { path = "crates/t3-contracts" }
 
 [profile.dev.package."*"]
 debug = false

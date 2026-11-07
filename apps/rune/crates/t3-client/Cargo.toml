@@ -16,3 +16,7 @@ futures-util = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+t3-contracts = { workspace = true }
+serde_path_to_error = "0.1"
