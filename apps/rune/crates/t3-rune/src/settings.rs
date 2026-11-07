@@ -77,6 +77,75 @@ impl App {
         self.settings_env()?.config.as_ref()?.settings.get(key)
     }
 
+    /// Loads the selected machine's archived threads (`orchestration.getArchivedShellSnapshot`).
+    pub fn load_archived(&mut self) {
+        let (Some(env), Some(handle)) = (self.settings_env(), HANDLE.get().cloned()) else {
+            return;
+        };
+        let (Some(session), env_id) = (env.session.clone(), env.cred.environment_id.clone()) else {
+            return;
+        };
+        self.archived = Some(Archived {
+            env_id: env_id.clone(),
+            loading: true,
+            error: None,
+            threads: Vec::new(),
+        });
+        session.call(
+            "orchestration.getArchivedShellSnapshot",
+            json!({}),
+            move |result| {
+                handle.update(move |s: &mut App, _| {
+                    let Some(a) = s.archived.as_mut().filter(|a| a.env_id == env_id) else {
+                        return;
+                    };
+                    a.loading = false;
+                    match result {
+                        Ok(v) => {
+                            let project = |id: &str| {
+                                v["projects"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .find(|p| p["id"] == id)
+                                    .and_then(|p| p["title"].as_str())
+                                    .unwrap_or("")
+                                    .to_owned()
+                            };
+                            let mut threads: Vec<ArchivedThread> = v["threads"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter(|t| t["deletedAt"].is_null())
+                                .map(|t| ArchivedThread {
+                                    id: t["id"].as_str().unwrap_or("").to_owned(),
+                                    title: t["title"].as_str().unwrap_or("").to_owned(),
+                                    project: project(t["projectId"].as_str().unwrap_or("")),
+                                    archived_at: t["archivedAt"].as_str().unwrap_or("").to_owned(),
+                                })
+                                .collect();
+                            threads.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+                            a.threads = threads;
+                        }
+                        Err(e) => a.error = Some(e),
+                    }
+                });
+            },
+        );
+    }
+
+    /// Unarchives one thread; it returns to the sidebar through the shell stream.
+    pub fn restore(&mut self, thread: &str) {
+        let Some(a) = self.archived.as_mut() else {
+            return;
+        };
+        a.threads.retain(|t| t.id != thread);
+        let env_id = a.env_id.clone();
+        if let Some(env) = self.env_index(&env_id) {
+            self.thread_action(env, thread, "thread.unarchive", json!({}));
+        }
+    }
+
     /// Pairs another machine from a link, keeping the ones already paired.
     pub fn add_machine(&mut self) {
         let text = self.add_link.text.trim().to_owned();
@@ -241,7 +310,10 @@ pub fn page(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                 machine_select(s, look, layer),
             )));
         }
-        body.child(threads).child(responses).child(updates)
+        body.child(threads)
+            .child(responses)
+            .child(updates)
+            .child(archived_section(s, look))
     };
 
     let mut connection = section(look, "Machines");
@@ -427,6 +499,69 @@ fn access_select(s: &App, mode: &str, look: &Look, layer: &mut Vec<El>) -> El {
         })
         .build(&look.kit, layer)
         .key("settings-access-select")
+}
+
+pub struct Archived {
+    env_id: String,
+    loading: bool,
+    error: Option<String>,
+    threads: Vec<ArchivedThread>,
+}
+
+struct ArchivedThread {
+    id: String,
+    title: String,
+    project: String,
+    archived_at: String,
+}
+
+fn archived_section(s: &App, look: &Look) -> El {
+    let k = &look.kit;
+    let mut section = section(look, "Archived threads");
+    let showing = s.archived.as_ref().filter(|a| {
+        Some(a.env_id.as_str()) == s.settings_env().map(|e| e.cred.environment_id.as_str())
+    });
+    let Some(a) = showing else {
+        return section.child(setting_row(
+            look,
+            "Archived threads",
+            "Archived threads leave the sidebar. Restore one to bring it back.",
+            Button::new("Show")
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .on_press(|s: &mut App| s.load_archived())
+                .build(k)
+                .key("archived-show"),
+        ));
+    };
+    let note = |t: String| text(t).font(k.ty.small).color(look.muted);
+    if a.loading {
+        return section.child(note("Loading archived threads…".into()));
+    }
+    if let Some(e) = &a.error {
+        return section.child(note(format!("Couldn't load them: {e}")));
+    }
+    if a.threads.is_empty() {
+        return section.child(note("Nothing archived on this machine".into()));
+    }
+    for (i, t) in a.threads.iter().enumerate() {
+        let id = t.id.clone();
+        section = section.child(
+            setting_row(
+                look,
+                &t.title,
+                &t.project,
+                Button::new("Restore")
+                    .variant(ButtonVariant::Outline)
+                    .control_size(ControlSize::Small)
+                    .on_press(move |s: &mut App| s.restore(&id))
+                    .build(k)
+                    .key(format!("restore-{i}")),
+            )
+            .key(format!("archived-{}", t.id)),
+        );
+    }
+    section
 }
 
 fn machine_select(s: &App, look: &Look, layer: &mut Vec<El>) -> El {

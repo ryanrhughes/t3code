@@ -1,5 +1,6 @@
 //! T3 Code on Rune: a native client for any T3 server (local, LAN, tailnet or tunnel).
 //! `cargo run -p t3-rune` opens the window; `-- --snap out.png --scene <name>` renders headless.
+mod actions;
 mod files;
 mod prefs;
 mod settings;
@@ -168,6 +169,15 @@ pub struct App {
     pub menu: Option<ComposerMenu>,
     /// The command palette (Ctrl/Cmd+K), when open.
     pub palette: Option<CommandPalette>,
+    /// A sidebar thread's context menu.
+    pub thread_menu: Option<actions::ThreadMenu>,
+    pub rename: Option<actions::Rename>,
+    /// Settings → Archived threads, once loaded.
+    pub archived: Option<settings::Archived>,
+    /// The open thread's read watermark, kept on the server for every client.
+    pub visit: Option<actions::Visit>,
+    /// When the soonest snoozed thread wakes, so the sidebar moves it back on time.
+    snooze_wake: Option<i64>,
     menu_seq: u64,
     /// Selected options per pending question: request id → question id → values.
     pub answers: HashMap<String, HashMap<String, Vec<String>>>,
@@ -341,6 +351,11 @@ impl App {
             menu: None,
             menu_seq: 0,
             palette: None,
+            thread_menu: None,
+            rename: None,
+            archived: None,
+            visit: None,
+            snooze_wake: None,
         };
         // A scene draws captured data; a live session would replace it.
         let scene = std::env::args().any(|a| a == "--scene");
@@ -492,6 +507,9 @@ impl App {
                     tx.instant();
                 }
                 self.envs[idx].shell.apply(item);
+                if idx == self.focus {
+                    self.track_visit();
+                }
                 if idx == self.focus && self.selected.is_none() && self.draft_project.is_none() {
                     self.draft_project = self
                         .shell()
@@ -619,6 +637,7 @@ impl App {
         if let Some(s) = self.session() {
             s.watch_thread(id);
         }
+        self.begin_visit();
         self.composer.focused = true;
     }
 
@@ -1461,6 +1480,28 @@ fn poll(s: &mut App, _now: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     s.sync_files();
+    if let Some(wait) = s.visit_due() {
+        tx.wake_after(wait);
+    }
+    // A snoozed thread returns to its folder when it wakes, with no server event to say so.
+    let now_ms = now * 1000;
+    if s.snooze_wake.is_some_and(|w| w <= now_ms) {
+        changed = true;
+    }
+    s.snooze_wake = s
+        .envs
+        .iter()
+        .flat_map(|e| &e.shell.threads)
+        .filter_map(|t| {
+            t.snoozed_until
+                .as_deref()
+                .and_then(t3_client::shelves::iso_ms)
+        })
+        .filter(|w| *w > now_ms)
+        .min();
+    if let Some(w) = s.snooze_wake {
+        tx.wake_after(std::time::Duration::from_millis((w - now_ms) as u64 + 50));
+    }
     if working || !s.toasts.is_empty() {
         tx.wake_after(std::time::Duration::from_secs(1));
     }
@@ -1530,6 +1571,10 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if ev.is_command('.') {
         s.stop();
+        return true;
+    }
+    if matches!(ev.key, rune::Key::Escape) && s.rename.is_some() {
+        s.finish_rename(false);
         return true;
     }
     if matches!(ev.key, rune::Key::Escape) && s.popup.is_some() {

@@ -5,5 +5,6 @@ pub mod pairing;
 pub mod protocol;
 pub mod rpc;
 pub mod session;
+pub mod shelves;
 pub mod store;
 pub mod terminal;

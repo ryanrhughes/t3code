@@ -23,5 +23,6 @@ export function decide(
     rust: boolean;
     release_smoke: boolean;
     mobile_native: boolean;
+    rune: boolean;
   };
 };

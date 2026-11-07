@@ -56,6 +56,9 @@ describe("check:changed", () => {
     assert.isTrue(decide(["packages/contracts/src/rpc.ts"], packages, false).outputs.rune);
     assert.isTrue(decide(["apps/web/src/themePalette.ts"], packages, false).outputs.rune);
     assert.isTrue(decide(["packages/shared/src/terminalOutput.ts"], packages, false).outputs.rune);
+    assert.isTrue(
+      decide(["packages/client-runtime/src/state/threadSettled.ts"], packages, false).outputs.rune,
+    );
     assert.isTrue(decide(["packages/shared/src/composerTrigger.ts"], packages, false).outputs.rune);
     assert.isFalse(decide(["apps/web/src/main.tsx"], packages, false).outputs.rune);
   });

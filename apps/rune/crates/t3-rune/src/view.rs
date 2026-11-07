@@ -89,6 +89,9 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
     if s.palette.is_some() {
         layer.push(palette(s, look));
     }
+    if let Some(dialog) = crate::actions::rename_dialog(s, look) {
+        layer.push(dialog);
+    }
     if !s.toasts.is_empty() {
         let k = &look.kit;
         let region = s.toasts.iter().fold(ToastRegion::new(), |r, (id, msg, _)| {
@@ -270,7 +273,11 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
         .iter()
         .any(|e| e.shell.threads.iter().any(|t| t.is_working()));
     SplitView::new(main)
-        .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar(s, look))
+        .sidebar(
+            &s.sidebar,
+            |s: &mut App| &mut s.sidebar,
+            sidebar(s, look, layer),
+        )
         .inspector(
             &s.diff_pane,
             |s: &mut App| &mut s.diff_pane,
@@ -317,14 +324,42 @@ enum Entry {
         status: Option<Status3>,
         age: String,
     },
-    /// The Settled shelf's header, under the projects.
-    Settled { count: usize, expanded: bool },
+    /// A shelf's header: Pinned above the projects, Snoozed and Settled under them.
+    Shelf {
+        shelf: Shelf,
+        count: usize,
+        /// `None` for Pinned, which doesn't fold.
+        expanded: Option<bool>,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Shelf {
+    Pinned,
+    Snoozed,
+    Settled,
+}
+
+/// The web's sections (`resolveSidebarThreadSection`): snoozed, else settled, else pinned,
+/// else active in its project's folder.
+fn section(t: &t3_client::protocol::ThreadShell, now_ms: i64) -> Option<Shelf> {
+    if t3_client::shelves::is_snoozed(t, now_ms) {
+        Some(Shelf::Snoozed)
+    } else if t.is_settled() {
+        Some(Shelf::Settled)
+    } else if t.pinned_at.is_some() {
+        Some(Shelf::Pinned)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
 enum Status3 {
     Busy,
     Attention,
+    /// Finished since the user last looked (`hasUnseenCompletion`).
+    Unread,
 }
 
 /// The key `collapsed` keeps a project's folder under: projects are per environment.
@@ -336,16 +371,32 @@ pub fn folder_key(s: &App, env: usize, project: &str) -> String {
     format!("{id}:{project}")
 }
 
-/// The sidebar as one flat list (project headers and their threads) so it virtualises. Every
-/// paired environment's projects are listed; with more than one, folders name their machine.
+/// The sidebar as one flat list (shelves, project headers and their threads) so it virtualises.
+/// Every paired environment's threads are listed; with more than one, folders name their machine.
 fn entries(s: &App) -> Vec<Entry> {
     let now = now_secs();
+    let now_ms = now * 1000;
     let many = s.envs.len() > 1;
+    type Row<'a> = (usize, &'a t3_client::protocol::ThreadShell);
+    let (mut pinned, mut snoozed, mut settled): (Vec<Row>, Vec<Row>, Vec<Row>) = Default::default();
     let mut folders = Vec::new();
     for (env, e) in s.envs.iter().enumerate() {
+        for t in e.shell.threads.iter().filter(|t| t.is_sidebar_row()) {
+            match section(t, now_ms) {
+                Some(Shelf::Pinned) => pinned.push((env, t)),
+                Some(Shelf::Snoozed) => snoozed.push((env, t)),
+                Some(Shelf::Settled) => settled.push((env, t)),
+                None => {}
+            }
+        }
         for p in e.shell.sidebar_projects() {
-            let threads = e.shell.project_threads(&p.id);
-            // As the web's folders: one whose threads all settled goes, unless it's pinned.
+            let threads: Vec<_> = e
+                .shell
+                .project_threads(&p.id)
+                .into_iter()
+                .filter(|t| section(t, now_ms).is_none())
+                .collect();
+            // As the web's folders: one whose threads all moved to shelves goes, unless pinned.
             if threads.is_empty() && p.pinned_at.is_none() {
                 continue;
             }
@@ -355,9 +406,37 @@ fn entries(s: &App) -> Vec<Entry> {
             folders.push((p.pinned_at.is_some(), latest.to_owned(), env, p, threads));
         }
     }
+    let mut out = Vec::new();
+    // A shelf's rows; a folded shelf still shows the open thread, as the web's do.
+    let shelf_rows = |out: &mut Vec<Entry>, rows: Vec<Row>, expanded: bool| {
+        out.extend(
+            rows.into_iter()
+                .filter(|(env, t)| {
+                    expanded || (*env == s.focus && s.selected.as_deref() == Some(t.id.as_str()))
+                })
+                .map(|(env, t)| thread_entry(s, env, t, now)),
+        );
+    };
+    if !pinned.is_empty() {
+        let mut keyed: Vec<(&str, &t3_client::protocol::ThreadShell)> = pinned
+            .iter()
+            .map(|(env, t)| (s.envs[*env].cred.environment_id.as_str(), *t))
+            .collect();
+        t3_client::shelves::sort_pinned(&mut keyed);
+        out.push(Entry::Shelf {
+            shelf: Shelf::Pinned,
+            count: keyed.len(),
+            expanded: None,
+        });
+        let env_of = |id: &str| s.env_index(id).unwrap_or(0);
+        shelf_rows(
+            &mut out,
+            keyed.into_iter().map(|(e, t)| (env_of(e), t)).collect(),
+            true,
+        );
+    }
     // Pinned folders first, then the most recently active, across machines.
     folders.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
-    let mut out = Vec::new();
     for (_, _, env, p, threads) in folders {
         let collapsed = s.collapsed.contains(&folder_key(s, env, &p.id));
         out.push(Entry::Project {
@@ -376,40 +455,47 @@ fn entries(s: &App) -> Vec<Entry> {
         }
         out.extend(threads.into_iter().map(|t| thread_entry(s, env, t, now)));
     }
-    let mut settled: Vec<(usize, &t3_client::protocol::ThreadShell)> = s
-        .envs
-        .iter()
-        .enumerate()
-        .flat_map(|(env, e)| e.shell.settled_threads().into_iter().map(move |t| (env, t)))
-        .collect();
+    if !snoozed.is_empty() {
+        // Soonest to wake first, as the web's.
+        let wake = |t: &t3_client::protocol::ThreadShell| {
+            t.snoozed_until
+                .as_deref()
+                .and_then(t3_client::shelves::iso_ms)
+                .unwrap_or(0)
+        };
+        snoozed.sort_by_key(|(_, t)| wake(t));
+        let expanded = s.prefs.snoozed_expanded;
+        out.push(Entry::Shelf {
+            shelf: Shelf::Snoozed,
+            count: snoozed.len(),
+            expanded: Some(expanded),
+        });
+        shelf_rows(&mut out, snoozed, expanded);
+    }
     if !settled.is_empty() {
         let at = |t: &t3_client::protocol::ThreadShell| {
             t.settled_at.clone().unwrap_or_else(|| t.updated_at.clone())
         };
         settled.sort_by(|a, b| at(b.1).cmp(&at(a.1)).then_with(|| a.1.id.cmp(&b.1.id)));
         let expanded = s.prefs.settled_expanded;
-        out.push(Entry::Settled {
+        out.push(Entry::Shelf {
+            shelf: Shelf::Settled,
             count: settled.len(),
-            expanded,
+            expanded: Some(expanded),
         });
-        // A closed shelf still shows the open thread, as the web's does.
-        out.extend(
-            settled
-                .into_iter()
-                .filter(|(env, t)| {
-                    expanded || (*env == s.focus && s.selected.as_deref() == Some(t.id.as_str()))
-                })
-                .map(|(env, t)| thread_entry(s, env, t, now)),
-        );
+        shelf_rows(&mut out, settled, expanded);
     }
     out
 }
 
 fn thread_entry(s: &App, env: usize, t: &t3_client::protocol::ThreadShell, now: i64) -> Entry {
+    let open = env == s.focus && s.selected.as_deref() == Some(t.id.as_str());
     let status = if t.needs_attention() {
         Some(Status3::Attention)
     } else if t.is_working() {
         Some(Status3::Busy)
+    } else if !open && t3_client::shelves::has_unseen_completion(t) {
+        Some(Status3::Unread)
     } else {
         None
     };
@@ -429,7 +515,7 @@ fn thread_entry(s: &App, env: usize, t: &t3_client::protocol::ThreadShell, now: 
     }
 }
 
-fn sidebar(s: &App, look: &Look) -> El {
+fn sidebar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     let k = &look.kit;
     let rows = Rc::new(entries(s));
     let new_row = SidebarRow::new("New thread")
@@ -491,6 +577,7 @@ fn sidebar(s: &App, look: &Look) -> El {
                 .truncate()
                 .grow(1.0),
         )
+        .child(crate::actions::thread_menu(s, look, layer))
         .child(
             IconButton::new(&SETTINGS)
                 .variant(IconButtonVariant::GhostMuted)
@@ -516,7 +603,11 @@ fn sidebar(s: &App, look: &Look) -> El {
             move |_: &App, i| match &key_rows[i] {
                 Entry::Project { env, id, .. } => Cow::Owned(format!("p:{env}:{id}")),
                 Entry::Thread { env, id, .. } => Cow::Owned(format!("t:{env}:{id}")),
-                Entry::Settled { .. } => Cow::Borrowed("shelf:settled"),
+                Entry::Shelf { shelf, .. } => Cow::Borrowed(match shelf {
+                    Shelf::Pinned => "shelf:pinned",
+                    Shelf::Snoozed => "shelf:snoozed",
+                    Shelf::Settled => "shelf:settled",
+                }),
             },
             move |_: &App, i| entry_row(&build_rows[i], selected.as_ref(), &kit),
         )
@@ -552,11 +643,29 @@ fn entry_row(e: &Entry, selected: Option<&(usize, String)>, k: &Kit) -> El {
                 )
                 .build(k)
         }
-        Entry::Settled { count, expanded } => SidebarHeader::new("Settled")
-            .count(*count)
-            .collapsed(!expanded)
-            .on_toggle(|s: &mut App, _| s.prefs.toggle_settled())
-            .build(k),
+        Entry::Shelf {
+            shelf,
+            count,
+            expanded,
+        } => {
+            let shelf = *shelf;
+            let header = SidebarHeader::new(match shelf {
+                Shelf::Pinned => "Pinned",
+                Shelf::Snoozed => "Snoozed",
+                Shelf::Settled => "Settled",
+            })
+            .count(*count);
+            match expanded {
+                None => header.build(k),
+                Some(open) => header
+                    .collapsed(!open)
+                    .on_toggle(move |s: &mut App, _| match shelf {
+                        Shelf::Snoozed => s.prefs.toggle_snoozed(),
+                        _ => s.prefs.toggle_settled(),
+                    })
+                    .build(k),
+            }
+        }
         Entry::Thread {
             env,
             id,
@@ -571,14 +680,22 @@ fn entry_row(e: &Entry, selected: Option<&(usize, String)>, k: &Kit) -> El {
                 .detail(age.clone())
                 .selected(selected.is_some_and(|(e, t)| *e == env && t == id))
                 .on_select(move |s: &mut App, _| s.open_thread_in(env, open.clone()));
+            let menu_id = id.clone();
             r = match status {
                 Some(Status3::Busy) => r.status(RowStatus::Other(
                     rune::icon(&WORKING, 14.0).color(k.c.text_accent),
                 )),
                 Some(Status3::Attention) => r.status(RowStatus::Attention),
+                Some(Status3::Unread) => r.status(RowStatus::Unread),
                 None => r,
             };
-            r.build(k)
+            r.build(k).on_secondary_press(move |s: &mut App, at, _| {
+                s.thread_menu = Some(crate::actions::ThreadMenu {
+                    env,
+                    thread: menu_id.clone(),
+                    at,
+                });
+            })
         }
     }
 }

@@ -16,6 +16,7 @@ pub struct Prefs {
     pub follow_up: String,
     /// The sidebar's Settled shelf is open; closed by default, as the web's.
     pub settled_expanded: bool,
+    pub snoozed_expanded: bool,
 }
 
 impl Default for Prefs {
@@ -26,6 +27,7 @@ impl Default for Prefs {
             adopted_default_theme: None,
             follow_up: "steer".into(),
             settled_expanded: false,
+            snoozed_expanded: false,
         }
     }
 }
@@ -87,6 +89,11 @@ impl Prefs {
 
     pub fn toggle_settled(&mut self) {
         self.settled_expanded = !self.settled_expanded;
+        self.save();
+    }
+
+    pub fn toggle_snoozed(&mut self) {
+        self.snoozed_expanded = !self.snoozed_expanded;
         self.save();
     }
 

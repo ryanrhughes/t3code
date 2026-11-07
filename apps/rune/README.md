@@ -33,6 +33,7 @@ node apps/rune/scripts/export-contract-schemas.ts
 node apps/rune/scripts/export-builtin-themes.ts && node apps/rune/scripts/theme-reference.ts
 node apps/rune/scripts/terminal-reference.ts   # command output parity (crates/t3-client/tests/terminal.rs)
 node apps/rune/scripts/composer-reference.ts   # @ / $ trigger parity (crates/t3-client/tests/composer.rs)
+node apps/rune/scripts/shelves-reference.ts    # snooze, unread and pin rules (crates/t3-client/tests/shelves.rs)
 # Headless render from captured wire data, no window and no network:
 cargo run -p t3-client --example capture -- /tmp/fixture.json      # read-only; uses the saved pairing
 T3_WIRE_FIXTURE=/tmp/fixture.json cargo test -p t3-client --test contracts   # real traffic vs. the contract

@@ -27,6 +27,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 t3-theme = { path = "crates/t3-theme" }
 t3-client = { path = "crates/t3-client" }
 t3-contracts = { path = "crates/t3-contracts" }

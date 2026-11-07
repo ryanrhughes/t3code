@@ -568,6 +568,7 @@ jobs:
           node apps/rune/scripts/theme-reference.ts
           node apps/rune/scripts/terminal-reference.ts
           node apps/rune/scripts/composer-reference.ts
+          node apps/rune/scripts/shelves-reference.ts
           git diff --exit-code -- apps/rune
 
       - name: Check Rust formatting

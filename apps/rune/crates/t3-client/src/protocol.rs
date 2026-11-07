@@ -236,6 +236,34 @@ pub struct ThreadShell {
     pub settled_override: Option<String>,
     pub deleted_at: Option<String>,
     pub pinned_at: Option<String>,
+    pub pin_order_key: Option<String>,
+    pub snoozed_until: Option<String>,
+    pub snoozed_at: Option<String>,
+    pub pending_guest_message_count: Option<u64>,
+    /// Absent unless a run is live: `preparing|starting|running|waiting`.
+    pub activity_run_status: Option<String>,
+    pub latest_run_id: Option<String>,
+    pub active_provider_thread_id: Option<String>,
+    pub pending_background_tasks: Vec<BackgroundTask>,
+    /// Outer `None`: an older server that doesn't send it; `Some(None)`: sent as null.
+    #[serde(deserialize_with = "present")]
+    pub latest_run_completed_at: Option<Option<String>>,
+    #[serde(deserialize_with = "present")]
+    pub last_visited_at: Option<Option<String>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackgroundTask {
+    pub kind: String,
+    pub awaited: Option<bool>,
+}
+
+/// Tells a key sent as null (`Some(None)`) from one not sent at all (`None`, via `default`).
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(d).map(Some)
 }
 
 impl ThreadShell {
@@ -666,6 +694,16 @@ impl DispatchMode {
             DispatchMode::Steer
         }
     }
+}
+
+/// A thread command with no payload beyond `extra`: `thread.pin`, `thread.settle`,
+/// `thread.snooze {snoozedUntil}`, `thread.visit {visitedAt, opened}`, …
+pub fn thread_command(kind: &str, thread_id: &str, extra: Value) -> Value {
+    let mut cmd = json!({ "type": kind, "commandId": new_id(), "threadId": thread_id });
+    if let (Some(cmd), Value::Object(extra)) = (cmd.as_object_mut(), extra) {
+        cmd.extend(extra);
+    }
+    cmd
 }
 
 pub fn message_dispatch(
