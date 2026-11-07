@@ -123,7 +123,13 @@ fn main() -> anyhow::Result<()> {
     let mode = |alternate: bool| {
         let s = seen.lock().unwrap();
         let t = s.thread.as_ref().unwrap();
-        DispatchMode::resolve(t.active_run().is_some(), alternate, false, t.can_steer())
+        DispatchMode::resolve(
+            t.active_run().is_some(),
+            alternate,
+            false,
+            t.can_steer(),
+            false,
+        )
     };
     // Sent the instant the run appears, a steer can't land yet; the client queues it instead.
     println!("send while starting -> {:?}", mode(false));
