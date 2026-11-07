@@ -401,6 +401,8 @@ pub struct TurnItem {
     pub text: Option<String>,
     pub streaming: Option<bool>,
     pub input_intent: Option<String>,
+    /// `ChatAttachment`s on a message: `{type, id, name, mimeType, sizeBytes}`.
+    pub attachments: Option<Vec<Value>>,
     // proposed_plan / todo_list
     pub markdown: Option<String>,
     pub steps: Option<Vec<PlanStep>>,
@@ -736,6 +738,20 @@ pub fn message_dispatch(
         cmd["modelSelection"] = serde_json::to_value(m).unwrap_or(Value::Null);
     }
     cmd
+}
+
+/// Attaches uploaded files to a `message.dispatch` or a `launchThread` input, as
+/// `{type, id, name, mimeType, sizeBytes}`.
+pub fn attach(cmd: &mut Value, attachments: &[Value]) {
+    if attachments.is_empty() {
+        return;
+    }
+    let slot = if cmd.get("initialMessage").is_some() {
+        &mut cmd["initialMessage"]["attachments"]
+    } else {
+        &mut cmd["attachments"]
+    };
+    *slot = Value::Array(attachments.to_vec());
 }
 
 pub fn launch_thread(

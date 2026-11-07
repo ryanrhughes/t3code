@@ -942,6 +942,35 @@ fn turn_item(s: &App, look: &Look, item: &TurnItem) -> El {
                 _ => None,
             };
             let mut c = col().w_full().items_end().gap(4.0).child(bubble);
+            let files = item.attachments.as_deref().unwrap_or_default();
+            if !files.is_empty() {
+                let chips = files
+                    .iter()
+                    .fold(row().gap(6.0).flex_wrap().justify_end(), |r, f| {
+                        let icon = if f["type"] == "image" {
+                            &glyphs::FILE_IMAGE
+                        } else {
+                            &glyphs::FILE
+                        };
+                        r.child(
+                            row()
+                                .gap(4.0)
+                                .px(8.0)
+                                .py(3.0)
+                                .center_y()
+                                .radius(k.radius.md)
+                                .border(1.0, look.border)
+                                .child(rune::icon(icon, 12.0).color(look.muted))
+                                .child(
+                                    text(f["name"].as_str().unwrap_or("attachment").to_owned())
+                                        .font(k.ty.small)
+                                        .color(look.muted)
+                                        .truncate(),
+                                ),
+                        )
+                    });
+                c = c.child(chips);
+            }
             if let Some(label) = label {
                 c = c.child(text(label).font(k.ty.small).color(look.muted));
             }
@@ -2046,6 +2075,19 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .on_submit(|s: &mut App, tx| s.send(false, tx))
         // Ctrl/Cmd+Return sends the alternate follow-up (queue while the agent works).
         .on_input_change(|s: &mut App, _| s.refresh_menu())
+        // A pasted screenshot or copied files attach; text pastes as text.
+        .on_input_paste(|s: &mut App, content: &rune::ClipboardContent, tx| {
+            if let Some(img) = content.image() {
+                s.attach_bytes("pasted-image.png".into(), img.png().to_vec(), tx);
+                return true;
+            }
+            if !content.files().is_empty() {
+                let files = content.files().to_vec();
+                s.attach_paths(&files, tx);
+                return true;
+            }
+            false
+        })
         .on_input_key(|s: &mut App, ev: &rune::KeyEvent, tx| {
             if !ev.mods.cmd && !ev.mods.ctrl && s.menu_key(&ev.key) {
                 return true;
@@ -2058,12 +2100,24 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
             }
             alternate
         });
-    let field = col()
+    let mut field = col()
         .key("composer-field")
         .w_full()
+        .gap(8.0)
         .px(4.0)
-        .pt(2.0)
-        .child(rune::auto_grow(editor, 2, 12));
+        .pt(2.0);
+    if let Some(chips) = crate::attach::chips(s, look) {
+        field = field.child(chips);
+    }
+    let field = field.child(rune::auto_grow(editor, 2, 12));
+    let attach = IconButton::new(&glyphs::FILE)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Small)
+        .label("Attach files")
+        .help("Or paste a screenshot or copied files")
+        .on_press_tx(|s: &mut App, tx| s.pick_attachment(tx))
+        .build(k)
+        .key("attach");
     let send = if working && s.composer.text.trim().is_empty() {
         IconButton::new(&STOP)
             .variant(IconButtonVariant::Contrast)
@@ -2088,6 +2142,7 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .gap(6.0)
         .center_y()
         .flex_wrap()
+        .child(attach)
         .child(model_menu(s, look, layer));
     if s.selected.is_none() {
         controls = controls.child(project_menu(s, look, layer));
@@ -2138,7 +2193,8 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .fill(look.raised)
         .border(1.0, look.border)
         .child(field)
-        .child(controls.child(el().grow(1.0)).child(send));
+        .child(controls.child(el().grow(1.0)).child(send))
+        .on_drop_files(|s: &mut App, paths: &[std::path::PathBuf], tx| s.attach_paths(paths, tx));
     row()
         .key("composer-dock")
         .w_full()

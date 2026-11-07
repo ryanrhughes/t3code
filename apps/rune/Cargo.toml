@@ -13,7 +13,9 @@ publish = false
 # Rune is pre-release; pin a rev. This is upstream `dev` 8ee30954 plus one fix in our fork:
 # the IME cursor area was resent every frame, so a focused field redrew the window at the display's
 # refresh rate (anomalyco/rune#225). Back to upstream once it lands there.
-rune = { git = "https://github.com/ryanrhughes/rune", rev = "7b0b77a10be6a42d9b9d69502dc2036c9993b7fc" }
+rune = { git = "https://github.com/ryanrhughes/rune", rev = "7b0b77a10be6a42d9b9d69502dc2036c9993b7fc", features = [
+  "native-file-dialog",
+] }
 rune-kit = { git = "https://github.com/ryanrhughes/rune", rev = "7b0b77a10be6a42d9b9d69502dc2036c9993b7fc", features = [
   "markdown",
 ] }

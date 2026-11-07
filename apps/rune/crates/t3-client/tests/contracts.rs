@@ -57,6 +57,42 @@ fn every_command_the_client_sends_matches_the_contract() {
         "launchThread",
         protocol::launch_thread("p1", "hi", &model, "full-access"),
     );
+    let files = [
+        json!({ "type": "image", "id": "a1", "name": "shot.png", "mimeType": "image/png", "sizeBytes": 10 }),
+        json!({ "type": "file", "id": "a2", "name": "notes.md", "mimeType": "text/markdown", "sizeBytes": 3 }),
+    ];
+    let mut send = protocol::message_dispatch("t1", "look", None, DispatchMode::Auto);
+    protocol::attach(&mut send, &files);
+    decodes::<Dispatch>("message.dispatch (attachments)", send);
+    let mut launch = protocol::launch_thread("p1", "look", &model, "full-access");
+    protocol::attach(&mut launch, &files);
+    decodes::<c::OrchestrationLaunchThreadPayload>("launchThread (attachments)", launch);
+    decodes::<c::AttachmentsCreateUploadUrlPayload>(
+        "attachments.createUploadUrl",
+        json!({ "type": "image", "name": "shot.png", "mimeType": "image/png", "sizeBytes": 10 }),
+    );
+    // The sidebar's thread actions.
+    for (kind, extra) in [
+        ("thread.pin", json!({})),
+        ("thread.unpin", json!({})),
+        ("thread.settle", json!({})),
+        ("thread.unsettle", json!({ "reason": "user" })),
+        (
+            "thread.snooze",
+            json!({ "snoozedUntil": "2026-11-07T18:00:00.000Z" }),
+        ),
+        ("thread.unsnooze", json!({ "reason": "user" })),
+        ("thread.mark-unread", json!({})),
+        ("thread.archive", json!({})),
+        ("thread.unarchive", json!({})),
+        ("thread.metadata.update", json!({ "title": "New title" })),
+        (
+            "thread.visit",
+            json!({ "visitedAt": "2026-11-07T18:00:00.000Z", "opened": true }),
+        ),
+    ] {
+        decodes::<Dispatch>(kind, protocol::thread_command(kind, "t1", extra));
+    }
 }
 
 #[test]

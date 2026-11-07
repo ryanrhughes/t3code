@@ -131,7 +131,7 @@ fn client_os() -> &'static str {
     }
 }
 
-fn http() -> reqwest::Client {
+pub(crate) fn http() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(concat!("t3-rune/", env!("CARGO_PKG_VERSION")))
         .build()

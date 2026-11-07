@@ -1,6 +1,7 @@
 //! T3 Code on Rune: a native client for any T3 server (local, LAN, tailnet or tunnel).
 //! `cargo run -p t3-rune` opens the window; `-- --snap out.png --scene <name>` renders headless.
 mod actions;
+mod attach;
 mod files;
 mod prefs;
 mod settings;
@@ -172,6 +173,9 @@ pub struct App {
     /// A sidebar thread's context menu.
     pub thread_menu: Option<actions::ThreadMenu>,
     pub rename: Option<actions::Rename>,
+    /// Files on their way into the next message.
+    pub attachments: Vec<attach::Attachment>,
+    next_attachment: u64,
     /// Settings → Archived threads, once loaded.
     pub archived: Option<settings::Archived>,
     /// The open thread's read watermark, kept on the server for every client.
@@ -353,6 +357,8 @@ impl App {
             palette: None,
             thread_menu: None,
             rename: None,
+            attachments: Vec::new(),
+            next_attachment: 0,
             archived: None,
             visit: None,
             snooze_wake: None,
@@ -716,6 +722,13 @@ impl App {
         let Some(session) = self.session() else {
             return;
         };
+        let files = match self.ready_attachments() {
+            Ok(files) => files,
+            Err(why) => {
+                self.toast(why, tx);
+                return;
+            }
+        };
         let Some(model) = self.effective_model() else {
             self.toast("No provider is ready on this server", tx);
             return;
@@ -741,12 +754,9 @@ impl App {
                     can_steer,
                     self.prefs.follow_up == "queue",
                 );
-                session.dispatch(protocol::message_dispatch(
-                    &id,
-                    &text,
-                    self.model.as_ref(),
-                    mode,
-                ));
+                let mut cmd = protocol::message_dispatch(&id, &text, self.model.as_ref(), mode);
+                protocol::attach(&mut cmd, &files);
+                session.dispatch(cmd);
             }
             None => {
                 let Some(project) = self.draft_project.clone() else {
@@ -756,10 +766,14 @@ impl App {
                 let runtime = self
                     .config()
                     .map_or("full-access".to_owned(), |c| c.default_runtime_mode());
-                session.launch(protocol::launch_thread(&project, &text, &model, &runtime));
+                let mut input = protocol::launch_thread(&project, &text, &model, &runtime);
+                protocol::attach(&mut input, &files);
+                session.launch(input);
             }
         }
         self.composer = focused("");
+        let env = self.env().map(|e| e.cred.environment_id.clone());
+        self.attachments.retain(|a| Some(&a.env_id) != env.as_ref());
     }
 
     pub fn stop(&mut self) {
