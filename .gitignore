@@ -48,3 +48,6 @@ node_modules/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
+
+# Rune spike client (Rust)
+apps/rune/target/

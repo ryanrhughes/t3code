@@ -1,0 +1,22 @@
+[package]
+name = "t3-rune"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Spike: T3 Code's native desktop client on Rune."
+
+[[bin]]
+name = "t3-rune"
+path = "src/main.rs"
+
+[dependencies]
+rune = { workspace = true }
+rune-kit = { workspace = true }
+rune-theme-opencode = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+t3-theme = { workspace = true }
+t3-client = { workspace = true }

@@ -1,0 +1,37 @@
+# Spike: a native T3 Code client built on Rune (github.com/anomalyco/rune).
+# Standalone workspace; nothing else in the repo builds it.
+[workspace]
+resolver = "3"
+members = ["crates/t3-theme", "crates/t3-client", "crates/t3-rune"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+# Rune is pre-release; pin a rev of `dev` (never rewritten).
+rune = { git = "https://github.com/anomalyco/rune", rev = "8ee30954add065098f043335ece9d9ea0914d21d" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "8ee30954add065098f043335ece9d9ea0914d21d", features = [
+  "markdown",
+] }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "8ee30954add065098f043335ece9d9ea0914d21d" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+t3-theme = { path = "crates/t3-theme" }
+t3-client = { path = "crates/t3-client" }
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 1
+
+[profile.release]
+codegen-units = 16
+incremental = true
