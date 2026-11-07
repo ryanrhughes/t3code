@@ -146,6 +146,9 @@ pub struct App {
     /// `sidebar_before_narrow` restores the user's choice when the window widens again.
     pub narrow: bool,
     sidebar_before_narrow: Option<bool>,
+    window_width: f32,
+    /// The inspector width the user chose, while `fit` holds it narrower.
+    inspector_wanted: Option<f32>,
     /// Output of expanded command rows, by turn item id. Only expanded rows hold a stream.
     pub outputs: HashMap<String, CommandOutput>,
 }
@@ -249,6 +252,8 @@ fn output_key(item_id: &str) -> u64 {
 }
 
 const NARROW: f32 = 720.0;
+/// The thread column never gets narrower than this while the window can afford it.
+const MAIN_MIN: f32 = 420.0;
 
 impl App {
     fn new() -> App {
@@ -290,6 +295,8 @@ impl App {
             clock: now_secs(),
             narrow: false,
             sidebar_before_narrow: None,
+            window_width: 0.0,
+            inspector_wanted: None,
             outputs: HashMap::new(),
             menu: None,
             menu_seq: 0,
@@ -712,6 +719,7 @@ impl App {
         let open = !(self.diff_pane.is_open() && self.inspector == tab);
         self.inspector = tab;
         self.diff_pane.set_open(open);
+        self.fit();
         self.sync_diff();
         self.sync_files();
     }
@@ -720,6 +728,7 @@ impl App {
         self.inspector = tab;
         self.popup = None;
         self.diff_pane.set_open(true);
+        self.fit();
         self.sync_diff();
         self.sync_files();
     }
@@ -1117,16 +1126,57 @@ impl App {
 
     /// Folds the sidebar away when the window turns narrow and restores it when it widens.
     pub fn fit_width(&mut self, width: f32) {
-        let narrow = width < NARROW;
-        if narrow == self.narrow {
+        self.window_width = width;
+        self.fit();
+    }
+
+    /// Keeps the thread at least `MAIN_MIN` wide: the inspector narrows first (to its minimum),
+    /// then the sidebar folds away. A tiled half-screen window otherwise squeezed the thread,
+    /// and with it the toolbar's toggles, to nothing.
+    fn fit(&mut self) {
+        let width = self.window_width;
+        if width <= 0.0 {
             return;
         }
-        self.narrow = narrow;
-        if narrow {
-            self.sidebar_before_narrow = Some(self.sidebar.is_open());
-            self.sidebar.set_open(false);
-        } else if let Some(open) = self.sidebar_before_narrow.take() {
-            self.sidebar.set_open(open);
+        let inspector = self.diff_pane.is_open();
+        let sidebar_wanted = self.sidebar_before_narrow.unwrap_or(self.sidebar.is_open());
+        let need = MAIN_MIN
+            + if sidebar_wanted {
+                self.sidebar.width()
+            } else {
+                0.0
+            }
+            + if inspector {
+                self.diff_pane.min_width()
+            } else {
+                0.0
+            };
+        let narrow = width < NARROW.max(need);
+        if narrow != self.narrow {
+            self.narrow = narrow;
+            if narrow {
+                self.sidebar_before_narrow = Some(self.sidebar.is_open());
+                self.sidebar.set_open(false);
+            } else if let Some(open) = self.sidebar_before_narrow.take() {
+                self.sidebar.set_open(open);
+            }
+        }
+        if !inspector {
+            return;
+        }
+        let sidebar = if self.sidebar.is_open() {
+            self.sidebar.width()
+        } else {
+            0.0
+        };
+        let room = (width - sidebar - MAIN_MIN).max(self.diff_pane.min_width());
+        let wanted = *self.inspector_wanted.get_or_insert(self.diff_pane.width());
+        let fitted = wanted.min(room);
+        if fitted != self.diff_pane.width() {
+            self.diff_pane.set_width(fitted);
+        }
+        if fitted == wanted {
+            self.inspector_wanted = None;
         }
     }
 
@@ -1316,6 +1366,12 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         && s.files.open.is_some()
     {
         s.close_file();
+        return true;
+    }
+    // Last in line for Escape: the inspector closes, so a squeezed window always has a way out.
+    if matches!(ev.key, rune::Key::Escape) && s.diff_pane.is_open() && s.popup.is_none() {
+        s.diff_pane.set_open(false);
+        s.fit();
         return true;
     }
     let _ = tx;
