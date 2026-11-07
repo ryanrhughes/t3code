@@ -215,7 +215,7 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
         _ if s.settings_open => "Settings".to_owned(),
         (Some(_), Some(t)) => t.thread.title.clone(),
         (Some(id), None) => s
-            .shell
+            .shell()
             .thread(id)
             .map(|t| t.title.clone())
             .unwrap_or_default(),
@@ -265,7 +265,10 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
         main.child(timeline(s, look))
             .child(composer(s, look, layer))
     };
-    let working = s.shell.threads.iter().any(|t| t.is_working());
+    let working = s
+        .envs
+        .iter()
+        .any(|e| e.shell.threads.iter().any(|t| t.is_working()));
     SplitView::new(main)
         .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar(s, look))
         .inspector(
@@ -301,12 +304,14 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
 #[derive(Clone)]
 enum Entry {
     Project {
+        env: usize,
         id: String,
         title: String,
         count: usize,
         collapsed: bool,
     },
     Thread {
+        env: usize,
         id: String,
         title: String,
         status: Option<Status3>,
@@ -322,30 +327,66 @@ enum Status3 {
     Attention,
 }
 
-/// The sidebar as one flat list (project headers and their threads) so it virtualises.
+/// The key `collapsed` keeps a project's folder under: projects are per environment.
+pub fn folder_key(s: &App, env: usize, project: &str) -> String {
+    let id = s
+        .envs
+        .get(env)
+        .map_or("", |e| e.cred.environment_id.as_str());
+    format!("{id}:{project}")
+}
+
+/// The sidebar as one flat list (project headers and their threads) so it virtualises. Every
+/// paired environment's projects are listed; with more than one, folders name their machine.
 fn entries(s: &App) -> Vec<Entry> {
     let now = now_secs();
-    let mut out = Vec::new();
-    for p in s.shell.sidebar_projects() {
-        let threads = s.shell.project_threads(&p.id);
-        // As the web's folders: one whose threads all settled goes, unless it's pinned.
-        if threads.is_empty() && p.pinned_at.is_none() {
-            continue;
+    let many = s.envs.len() > 1;
+    let mut folders = Vec::new();
+    for (env, e) in s.envs.iter().enumerate() {
+        for p in e.shell.sidebar_projects() {
+            let threads = e.shell.project_threads(&p.id);
+            // As the web's folders: one whose threads all settled goes, unless it's pinned.
+            if threads.is_empty() && p.pinned_at.is_none() {
+                continue;
+            }
+            let latest = threads
+                .first()
+                .map_or(p.updated_at.as_str(), |t| t.updated_at.as_str());
+            folders.push((p.pinned_at.is_some(), latest.to_owned(), env, p, threads));
         }
-        let collapsed = s.collapsed.contains(&p.id);
+    }
+    // Pinned folders first, then the most recently active, across machines.
+    folders.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    let mut out = Vec::new();
+    for (_, _, env, p, threads) in folders {
+        let collapsed = s.collapsed.contains(&folder_key(s, env, &p.id));
         out.push(Entry::Project {
+            env,
             id: p.id.clone(),
-            title: p.title.clone(),
+            title: if many {
+                format!("{} · {}", p.title, s.envs[env].label())
+            } else {
+                p.title.clone()
+            },
             count: threads.len(),
             collapsed,
         });
         if collapsed {
             continue;
         }
-        out.extend(threads.into_iter().map(|t| thread_entry(s, t, now)));
+        out.extend(threads.into_iter().map(|t| thread_entry(s, env, t, now)));
     }
-    let settled = s.shell.settled_threads();
+    let mut settled: Vec<(usize, &t3_client::protocol::ThreadShell)> = s
+        .envs
+        .iter()
+        .enumerate()
+        .flat_map(|(env, e)| e.shell.settled_threads().into_iter().map(move |t| (env, t)))
+        .collect();
     if !settled.is_empty() {
+        let at = |t: &t3_client::protocol::ThreadShell| {
+            t.settled_at.clone().unwrap_or_else(|| t.updated_at.clone())
+        };
+        settled.sort_by(|a, b| at(b.1).cmp(&at(a.1)).then_with(|| a.1.id.cmp(&b.1.id)));
         let expanded = s.prefs.settled_expanded;
         out.push(Entry::Settled {
             count: settled.len(),
@@ -355,14 +396,16 @@ fn entries(s: &App) -> Vec<Entry> {
         out.extend(
             settled
                 .into_iter()
-                .filter(|t| expanded || s.selected.as_deref() == Some(t.id.as_str()))
-                .map(|t| thread_entry(s, t, now)),
+                .filter(|(env, t)| {
+                    expanded || (*env == s.focus && s.selected.as_deref() == Some(t.id.as_str()))
+                })
+                .map(|(env, t)| thread_entry(s, env, t, now)),
         );
     }
     out
 }
 
-fn thread_entry(s: &App, t: &t3_client::protocol::ThreadShell, now: i64) -> Entry {
+fn thread_entry(s: &App, env: usize, t: &t3_client::protocol::ThreadShell, now: i64) -> Entry {
     let status = if t.needs_attention() {
         Some(Status3::Attention)
     } else if t.is_working() {
@@ -378,6 +421,7 @@ fn thread_entry(s: &App, t: &t3_client::protocol::ThreadShell, now: i64) -> Entr
         _ => age(&t.updated_at, now),
     };
     Entry::Thread {
+        env,
         id: t.id.clone(),
         title: t.title.clone(),
         status,
@@ -396,15 +440,33 @@ fn sidebar(s: &App, look: &Look) -> El {
         .on_select(|s: &mut App, _| s.new_thread(None))
         .build(k)
         .key("new-thread");
-    let (status_label, status_color) = match &s.status {
-        Status::Connected => (
-            s.cred
-                .as_ref()
-                .map_or("Connected".to_owned(), |c| c.label.clone()),
+    // One machine: its name and state. Several: how many are up, and which ones aren't.
+    let down: Vec<&str> = s
+        .envs
+        .iter()
+        .filter(|e| !matches!(e.status, Status::Connected))
+        .map(|e| e.label())
+        .collect();
+    let all_up = down.is_empty();
+    let (status_label, status_color) = match (s.envs.len(), &s.status()) {
+        (0 | 1, Status::Connected) => (
+            s.env()
+                .map_or("Connected".to_owned(), |e| e.label().to_owned()),
             look.muted,
         ),
-        Status::Connecting => ("Connecting…".to_owned(), look.muted),
-        Status::Reconnecting { reason, .. } => (format!("Reconnecting: {reason}"), look.warning_fg),
+        (0 | 1, Status::Connecting) => ("Connecting…".to_owned(), look.muted),
+        (0 | 1, Status::Reconnecting { reason, .. }) => {
+            (format!("Reconnecting: {reason}"), look.warning_fg)
+        }
+        (n, _) if all_up => (format!("{n} machines"), look.muted),
+        (n, _) => (
+            format!(
+                "{}/{n} connected · {} offline",
+                n - down.len(),
+                down.join(", ")
+            ),
+            look.warning_fg,
+        ),
     };
     let footer = row()
         .key("env-status")
@@ -416,7 +478,7 @@ fn sidebar(s: &App, look: &Look) -> El {
         .child(
             el().size(7.0, 7.0)
                 .radius(3.5)
-                .fill(if matches!(s.status, Status::Connected) {
+                .fill(if all_up && !s.envs.is_empty() {
                     look.accent
                 } else {
                     look.warning_fg
@@ -441,7 +503,7 @@ fn sidebar(s: &App, look: &Look) -> El {
                 .key("settings-toggle"),
         );
     let (key_rows, build_rows, kit) = (rows.clone(), rows.clone(), k.clone());
-    let selected = s.selected.clone();
+    let selected = s.selected.clone().map(|id| (s.focus, id));
     Sidebar::new()
         .label("Threads")
         .inset(0.0)
@@ -452,37 +514,39 @@ fn sidebar(s: &App, look: &Look) -> El {
         .virtual_rows(
             rows.len(),
             move |_: &App, i| match &key_rows[i] {
-                Entry::Project { id, .. } => Cow::Owned(format!("p:{id}")),
-                Entry::Thread { id, .. } => Cow::Owned(format!("t:{id}")),
+                Entry::Project { env, id, .. } => Cow::Owned(format!("p:{env}:{id}")),
+                Entry::Thread { env, id, .. } => Cow::Owned(format!("t:{env}:{id}")),
                 Entry::Settled { .. } => Cow::Borrowed("shelf:settled"),
             },
-            move |_: &App, i| entry_row(&build_rows[i], selected.as_deref(), &kit),
+            move |_: &App, i| entry_row(&build_rows[i], selected.as_ref(), &kit),
         )
         .build(k)
 }
 
-fn entry_row(e: &Entry, selected: Option<&str>, k: &Kit) -> El {
+fn entry_row(e: &Entry, selected: Option<&(usize, String)>, k: &Kit) -> El {
     match e {
         Entry::Project {
+            env,
             id,
             title,
             count,
             collapsed,
         } => {
-            let (toggle_id, new_id) = (id.clone(), id.clone());
+            let (env, toggle_id, new_id) = (*env, id.clone(), id.clone());
             SidebarHeader::new(title.clone())
                 .count(*count)
                 .collapsed(*collapsed)
                 .on_toggle(move |s: &mut App, _| {
-                    if !s.collapsed.remove(&toggle_id) {
-                        s.collapsed.insert(toggle_id.clone());
+                    let key = folder_key(s, env, &toggle_id);
+                    if !s.collapsed.remove(&key) {
+                        s.collapsed.insert(key);
                     }
                 })
                 .action(
                     IconButton::new(&PLUS)
                         .variant(IconButtonVariant::GhostMuted)
                         .label("New thread in project")
-                        .on_press(move |s: &mut App| s.new_thread(Some(new_id.clone())))
+                        .on_press(move |s: &mut App| s.new_thread_in(env, new_id.clone()))
                         .build(k)
                         .key("new-in-project"),
                 )
@@ -494,18 +558,19 @@ fn entry_row(e: &Entry, selected: Option<&str>, k: &Kit) -> El {
             .on_toggle(|s: &mut App, _| s.prefs.toggle_settled())
             .build(k),
         Entry::Thread {
+            env,
             id,
             title,
             status,
             age,
         } => {
-            let open = id.clone();
+            let (env, open) = (*env, id.clone());
             let mut r = SidebarRow::new(title.clone())
                 .height(32.0)
                 .depth(1)
                 .detail(age.clone())
-                .selected(selected == Some(id.as_str()))
-                .on_select(move |s: &mut App, _| s.open_thread(Some(open.clone())));
+                .selected(selected.is_some_and(|(e, t)| *e == env && t == id))
+                .on_select(move |s: &mut App, _| s.open_thread_in(env, open.clone()));
             r = match status {
                 Some(Status3::Busy) => r.status(RowStatus::Other(
                     rune::icon(&WORKING, 14.0).color(k.c.text_accent),
@@ -696,14 +761,17 @@ fn timeline(s: &App, look: &Look) -> El {
 
 fn empty_state(s: &App, look: &Look) -> El {
     let k = &look.kit;
-    let project = s.draft_project.as_deref().and_then(|p| s.shell.project(p));
+    let project = s
+        .draft_project
+        .as_deref()
+        .and_then(|p| s.shell().project(p));
     let hint = match project {
         Some(p) => format!(
             "Start a thread in {}. Messages run on {}.",
             p.title,
-            s.cred.as_ref().map_or("the server", |c| c.label.as_str())
+            s.env().map_or("the server", |e| e.label())
         ),
-        None if !s.shell.loaded => "Loading projects…".to_owned(),
+        None if !s.shell().loaded => "Loading projects…".to_owned(),
         None => "Add a project from the web or desktop app to start a thread here.".to_owned(),
     };
     col()
@@ -1854,7 +1922,7 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     if s.selected.is_none() {
         controls = controls.child(project_menu(s, look, layer));
     }
-    if let Status::Reconnecting { .. } = &s.status {
+    if let Status::Reconnecting { .. } = &s.status() {
         controls = controls.child(
             text("Offline — messages can't send")
                 .font(k.ty.small)
@@ -1913,8 +1981,7 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
 
 fn model_label(s: &App, m: &ModelSelection) -> String {
     let provider = s
-        .config
-        .as_ref()
+        .config()
         .and_then(|c| c.providers.iter().find(|p| p.instance_id == m.instance_id));
     let model = provider.and_then(|p| p.models.iter().find(|x| x.slug == m.model));
     model
@@ -1941,8 +2008,8 @@ fn model_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .min_width(240.0)
         .on_close(|s: &mut App| s.popup = None);
     for p in s
-        .config
-        .iter()
+        .config()
+        .into_iter()
         .flat_map(|c| &c.providers)
         .filter(|p| p.usable() && !p.models.is_empty())
     {
@@ -1979,7 +2046,7 @@ fn project_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     let label = s
         .draft_project
         .as_deref()
-        .and_then(|p| s.shell.project(p))
+        .and_then(|p| s.shell().project(p))
         .map_or("Pick a project".to_owned(), |p| p.title.clone());
     let open = s.popup == Some(Popup::Project);
     let trigger = Button::new(label)
@@ -1993,16 +2060,23 @@ fn project_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .open(open)
         .min_width(220.0)
         .on_close(|s: &mut App| s.popup = None);
-    for p in s.shell.sidebar_projects() {
-        let id = p.id.clone();
-        menu = menu.item(
-            MenuItem::new(p.title.clone())
-                .checked(s.draft_project.as_deref() == Some(&p.id))
-                .on_select(move |s: &mut App| {
-                    s.draft_project = Some(id.clone());
-                    s.popup = None;
-                }),
-        );
+    // Every machine's projects; picking another machine's moves the draft there.
+    let many = s.envs.len() > 1;
+    for (env, e) in s.envs.iter().enumerate() {
+        if many {
+            menu = menu.group_label(e.label().to_owned());
+        }
+        for p in e.shell.sidebar_projects() {
+            let id = p.id.clone();
+            menu = menu.item(
+                MenuItem::new(p.title.clone())
+                    .checked(env == s.focus && s.draft_project.as_deref() == Some(&p.id))
+                    .on_select(move |s: &mut App| {
+                        s.new_thread_in(env, id.clone());
+                        s.popup = None;
+                    }),
+            );
+        }
     }
     menu.build(k, layer)
 }

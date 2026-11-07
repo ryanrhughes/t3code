@@ -207,17 +207,17 @@ impl App {
         let project = self
             .selected
             .as_deref()
-            .and_then(|id| self.shell.thread(id))
+            .and_then(|id| self.shell().thread(id))
             .map(|t| t.project_id.clone())
             .or(self.draft_project.clone())?;
-        Some(self.shell.project(&project)?.workspace_root.clone())
+        Some(self.shell().project(&project)?.workspace_root.clone())
     }
 
     /// Follows the workspace on screen and asks for every folder that is open but not loaded.
     /// Runs from `poll`, so a folder opened by click or by key loads either way.
     pub fn sync_files(&mut self) {
         // Without a session there is nothing to load (and a headless scene fills the panel).
-        if self.session.is_none()
+        if self.session().is_none()
             || !self.diff_pane.is_open()
             || self.inspector != crate::Inspector::Files
         {
@@ -245,9 +245,11 @@ impl App {
     }
 
     fn load_dir(&mut self, dir: String) {
-        let (Some(cwd), Some(session), Some(handle)) =
-            (self.files.cwd.clone(), &self.session, HANDLE.get().cloned())
-        else {
+        let (Some(cwd), Some(session), Some(handle)) = (
+            self.files.cwd.clone(),
+            self.session(),
+            HANDLE.get().cloned(),
+        ) else {
             return;
         };
         self.files.requested.insert(dir.clone());
@@ -299,9 +301,11 @@ impl App {
         if is_placeholder(path) || self.files.open.as_ref().is_some_and(|f| f.path == path) {
             return;
         }
-        let (Some(cwd), Some(session), Some(handle)) =
-            (self.files.cwd.clone(), &self.session, HANDLE.get().cloned())
-        else {
+        let (Some(cwd), Some(session), Some(handle)) = (
+            self.files.cwd.clone(),
+            self.session(),
+            HANDLE.get().cloned(),
+        ) else {
             return;
         };
         self.files.file_seq += 1;

@@ -7,6 +7,7 @@ mod theme;
 mod view;
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 use rune::{AppHandle, AppSpec, Chrome, KeyEvent, TextEdit, Tx};
@@ -54,6 +55,7 @@ pub enum Popup {
     DiffTurn,
     SettingsTheme,
     SettingsAccess,
+    SettingsMachine,
 }
 
 /// Which changes the diff panel shows.
@@ -98,22 +100,59 @@ impl Default for DiffPanel {
     }
 }
 
-pub struct App {
-    pub screen: Screen,
-    pub cred: Option<Credential>,
-    pub session: Option<SessionHandle>,
+/// One paired environment: a T3 server on this machine or another, with its own socket.
+pub struct Env {
+    pub cred: Credential,
+    pub session: Option<Rc<SessionHandle>>,
     pub status: Status,
     pub config: Option<ServerConfig>,
+    pub shell: ShellState,
+}
+
+impl Env {
+    /// The machine's name: the server's own label once connected, else the paired one.
+    pub fn label(&self) -> &str {
+        self.config
+            .as_ref()
+            .map(|c| c.environment.label.as_str())
+            .filter(|l| !l.is_empty())
+            .unwrap_or(&self.cred.label)
+    }
+
+    /// A server on this machine, whose theme files (Omarchy's) the client follows.
+    fn is_local(&self) -> bool {
+        url::Url::parse(&self.cred.http_base).is_ok_and(|u| {
+            matches!(
+                u.host_str(),
+                Some("127.0.0.1" | "localhost" | "[::1]" | "::1")
+            )
+        })
+    }
+}
+
+static NO_SHELL: std::sync::LazyLock<ShellState> = std::sync::LazyLock::new(ShellState::default);
+
+pub struct App {
+    pub screen: Screen,
+    /// Every paired environment, merged in the sidebar.
+    pub envs: Vec<Env>,
+    /// The environment of the open thread or draft; sends and lookups go to it.
+    pub focus: usize,
     pub env_themes: Vec<ThemeDefinition>,
     pub prefs: prefs::Prefs,
     pub looks: theme::Looks,
-    pub shell: ShellState,
     pub sidebar: PaneState,
     /// The inspector beside the thread, showing the changes or the files.
     pub diff_pane: PaneState,
     pub inspector: Inspector,
     /// The settings page, in place of the thread.
     pub settings_open: bool,
+    /// The machine whose server settings the page shows.
+    pub settings_env: usize,
+    /// Settings → Machines: a pairing link for another machine.
+    pub add_link: TextEdit,
+    pub adding: bool,
+    pub add_error: Option<String>,
     pub diff: DiffPanel,
     pub files: files::FilesPanel,
     pub collapsed: HashSet<String>,
@@ -174,7 +213,7 @@ pub enum PaletteAction {
     ToggleFiles,
     Settings,
     ToggleSidebar,
-    OpenThread(String),
+    OpenThread(usize, String),
     Theme(String),
 }
 
@@ -259,25 +298,26 @@ impl App {
     fn new() -> App {
         let prefs = prefs::Prefs::load();
         let looks = theme::Looks::build(&prefs.theme(), &[]);
-        let cred = pairing::load_credential();
+        let creds = pairing::load_credentials();
         let mut app = App {
-            screen: if cred.is_some() {
-                Screen::Main
-            } else {
+            screen: if creds.is_empty() {
                 Screen::pairing(None)
+            } else {
+                Screen::Main
             },
-            cred: None,
-            session: None,
-            status: Status::Connecting,
-            config: None,
+            envs: Vec::new(),
+            focus: 0,
             env_themes: Vec::new(),
             prefs,
             looks,
-            shell: ShellState::default(),
             sidebar: PaneState::new(276.0).range(200.0, 520.0),
             diff_pane: PaneState::new(620.0).range(380.0, 1200.0).collapsed(),
             inspector: Inspector::Changes,
             settings_open: false,
+            settings_env: 0,
+            add_link: TextEdit::new(""),
+            adding: false,
+            add_error: None,
             diff: DiffPanel::default(),
             files: files::FilesPanel::default(),
             collapsed: HashSet::new(),
@@ -302,30 +342,85 @@ impl App {
             menu_seq: 0,
             palette: None,
         };
-        match cred {
-            // A scene draws captured data; a live session would replace it.
-            Some(_) if std::env::args().any(|a| a == "--scene") => {}
-            Some(c) => app.start(c),
-            // First launch on a machine that runs T3 Code: connect to it with no link. A revoked or
-            // forgotten pairing lands on the pairing screen instead, so revoking sticks.
-            None if matches!(app.screen, Screen::Pair { local: Some(_), .. }) && !headless() => {
+        // A scene draws captured data; a live session would replace it.
+        let scene = std::env::args().any(|a| a == "--scene");
+        if creds.is_empty() {
+            // First launch on a machine that runs T3 Code: connect to it with no link. A revoked
+            // or forgotten pairing lands on the pairing screen instead, so revoking sticks.
+            if matches!(app.screen, Screen::Pair { local: Some(_), .. }) && !headless() {
                 app.connect_local()
             }
-            None => {}
+        } else if !scene {
+            for c in creds {
+                app.start(c);
+            }
         }
         app
     }
 
     /// Connects in the background. Events land through `AppHandle::update`, so nothing polls.
+    /// Pairing an environment again replaces its session.
     fn start(&mut self, cred: Credential) {
-        self.cred = Some(cred.clone());
-        let Some(handle) = HANDLE.get().cloned() else {
-            return;
-        };
-        self.session = Some(session::spawn(
+        let env_id = cred.environment_id.clone();
+        let session = HANDLE.get().cloned().map(|handle| {
+            let id = env_id.clone();
+            Rc::new(session::spawn(
+                cred.clone(),
+                std::sync::Arc::new(move |ev| {
+                    let id = id.clone();
+                    handle.update(move |s, tx| s.on_event(&id, ev, tx))
+                }),
+            ))
+        });
+        let env = Env {
             cred,
-            std::sync::Arc::new(move |ev| handle.update(move |s, tx| s.on_event(ev, tx))),
-        ));
+            session,
+            status: Status::Connecting,
+            config: None,
+            shell: ShellState::default(),
+        };
+        match self.env_index(&env_id) {
+            Some(i) => self.envs[i] = env,
+            None => self.envs.push(env),
+        }
+    }
+
+    pub fn env_index(&self, environment_id: &str) -> Option<usize> {
+        self.envs
+            .iter()
+            .position(|e| e.cred.environment_id == environment_id)
+    }
+
+    pub fn env(&self) -> Option<&Env> {
+        self.envs.get(self.focus)
+    }
+
+    /// The focused environment's session; an `Rc`, so holding it doesn't borrow the app.
+    pub fn session(&self) -> Option<Rc<SessionHandle>> {
+        self.env()?.session.clone()
+    }
+
+    pub fn config(&self) -> Option<&ServerConfig> {
+        self.env()?.config.as_ref()
+    }
+
+    pub fn cred(&self) -> Option<&Credential> {
+        self.env().map(|e| &e.cred)
+    }
+
+    pub fn status(&self) -> Status {
+        self.env().map_or(Status::Connecting, |e| e.status.clone())
+    }
+
+    /// The focused environment's projects and threads.
+    pub fn shell(&self) -> &ShellState {
+        self.env().map_or(&NO_SHELL, |e| &e.shell)
+    }
+
+    /// The environment whose theme files and `t3 theme set` default the client follows: the
+    /// one on this machine, else the first paired.
+    fn theme_env(&self) -> usize {
+        self.envs.iter().position(Env::is_local).unwrap_or(0)
     }
 
     fn rebuild_looks(&mut self) {
@@ -343,35 +438,42 @@ impl App {
         tx.wake_after(std::time::Duration::from_secs(6));
     }
 
-    fn on_event(&mut self, ev: ClientEvent, tx: &mut Tx) {
+    fn on_event(&mut self, env_id: &str, ev: ClientEvent, tx: &mut Tx) {
         DIAG_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(idx) = self.env_index(env_id) else {
+            return;
+        };
+        let themes = idx == self.theme_env();
         match ev {
-            ClientEvent::Status(s) => self.status = s,
+            ClientEvent::Status(s) => self.envs[idx].status = s,
             ClientEvent::Config(ev) => match ev {
                 ServerConfigEvent::Snapshot { config } => {
                     // `t3 theme set <id>` is adopted once per generation, as the web does.
-                    if let Some(generation) = config.default_theme() {
+                    if let Some(generation) = config.default_theme().filter(|_| themes) {
                         if self.prefs.adopt_default_theme(&generation) {
                             self.rebuild_looks();
                         }
                     }
-                    self.config = Some(config);
+                    self.envs[idx].config = Some(config);
                 }
                 ServerConfigEvent::ProviderStatuses { payload } => {
-                    if let Some(c) = self.config.as_mut() {
+                    if let Some(c) = self.envs[idx].config.as_mut() {
                         c.providers = payload.providers;
                     }
                 }
                 ServerConfigEvent::SettingsUpdated { payload } => {
-                    if let Some(c) = self.config.as_mut() {
+                    let mut adopt = None;
+                    if let Some(c) = self.envs[idx].config.as_mut() {
                         c.settings = payload.settings;
-                        if let Some(generation) = c.default_theme() {
-                            if self.prefs.adopt_default_theme(&generation) {
-                                self.rebuild_looks();
-                            }
+                        adopt = c.default_theme().filter(|_| themes);
+                    }
+                    if let Some(generation) = adopt {
+                        if self.prefs.adopt_default_theme(&generation) {
+                            self.rebuild_looks();
                         }
                     }
                 }
+                ServerConfigEvent::EnvironmentThemesUpdated { .. } if !themes => {}
                 ServerConfigEvent::EnvironmentThemesUpdated { payload } => {
                     // Omarchy rewrites themes/omarchy.json on every theme switch; this repaints live.
                     self.env_themes = payload
@@ -386,17 +488,20 @@ impl App {
             },
             ClientEvent::Shell(item) => {
                 // The first snapshot lands without motion so the sidebar doesn't animate in.
-                if !self.shell.loaded {
+                if !self.envs[idx].shell.loaded {
                     tx.instant();
                 }
-                self.shell.apply(item);
-                if self.selected.is_none() && self.draft_project.is_none() {
-                    self.draft_project =
-                        self.shell.sidebar_projects().first().map(|p| p.id.clone());
+                self.envs[idx].shell.apply(item);
+                if idx == self.focus && self.selected.is_none() && self.draft_project.is_none() {
+                    self.draft_project = self
+                        .shell()
+                        .sidebar_projects()
+                        .first()
+                        .map(|p| p.id.clone());
                 }
             }
             ClientEvent::Thread { thread_id, item } => {
-                if self.selected.as_deref() != Some(&thread_id) {
+                if idx != self.focus || self.selected.as_deref() != Some(&thread_id) {
                     return;
                 }
                 match item {
@@ -432,14 +537,67 @@ impl App {
                     ThreadStreamItem::Unknown => {}
                 }
             }
-            ClientEvent::ThreadLaunched { thread_id } => self.open_thread(Some(thread_id)),
-            ClientEvent::CommandFailed(msg) => self.toast(msg, tx),
+            ClientEvent::ThreadLaunched { thread_id } => self.open_thread_in(idx, thread_id),
+            ClientEvent::CommandFailed(msg) => {
+                let msg = if self.envs.len() > 1 {
+                    format!("{}: {msg}", self.envs[idx].label())
+                } else {
+                    msg
+                };
+                self.toast(msg, tx)
+            }
             ClientEvent::Unauthorized(msg) => {
-                pairing::forget_credential();
-                self.session = None;
-                self.screen = Screen::pairing(Some(format!("Pair again: {msg}")));
+                let label = self.envs[idx].label().to_owned();
+                self.remove_env(idx);
+                if self.envs.is_empty() {
+                    self.screen = Screen::pairing(Some(format!("Pair again: {msg}")));
+                } else {
+                    self.toast(format!("{label} revoked this client: {msg}"), tx);
+                }
             }
         }
+    }
+
+    /// Forgets an environment: its credential, its socket and anything open from it.
+    pub fn remove_env(&mut self, idx: usize) {
+        if idx >= self.envs.len() {
+            return;
+        }
+        pairing::forget_credential(&self.envs[idx].cred.environment_id);
+        self.envs.remove(idx);
+        if idx == self.focus {
+            self.focus = 0;
+            self.thread = None;
+            self.selected = None;
+            self.draft_project = self
+                .shell()
+                .sidebar_projects()
+                .first()
+                .map(|p| p.id.clone());
+        } else if idx < self.focus {
+            self.focus -= 1;
+        }
+    }
+
+    /// Opens a thread from any environment, moving the focus there.
+    pub fn open_thread_in(&mut self, env: usize, id: String) {
+        self.focus_env(env);
+        self.open_thread(Some(id));
+    }
+
+    fn focus_env(&mut self, env: usize) {
+        if env == self.focus || env >= self.envs.len() {
+            return;
+        }
+        if let Some(s) = self.session() {
+            s.watch_thread(None);
+        }
+        self.close_outputs();
+        self.focus = env;
+        self.selected = None;
+        self.thread = None;
+        self.draft_project = None;
+        self.model = None;
     }
 
     pub fn open_thread(&mut self, id: Option<String>) {
@@ -454,20 +612,31 @@ impl App {
             sel: self.diff.sel,
             ..DiffPanel::default()
         };
-        if let Some(t) = id.as_deref().and_then(|id| self.shell.thread(id)) {
+        if let Some(t) = id.as_deref().and_then(|id| self.shell().thread(id)) {
             self.draft_project = Some(t.project_id.clone());
         }
         self.selected = id.clone();
-        if let Some(s) = &self.session {
+        if let Some(s) = self.session() {
             s.watch_thread(id);
         }
         self.composer.focused = true;
     }
 
+    /// A draft in `project` of environment `env`.
+    pub fn new_thread_in(&mut self, env: usize, project_id: String) {
+        self.focus_env(env);
+        self.new_thread(Some(project_id));
+    }
+
     pub fn new_thread(&mut self, project_id: Option<String>) {
         let project = project_id
             .or_else(|| self.draft_project.clone())
-            .or_else(|| self.shell.sidebar_projects().first().map(|p| p.id.clone()));
+            .or_else(|| {
+                self.shell()
+                    .sidebar_projects()
+                    .first()
+                    .map(|p| p.id.clone())
+            });
         self.open_thread(None);
         self.draft_project = project;
     }
@@ -481,15 +650,15 @@ impl App {
         if let Some(t) = self
             .selected
             .as_deref()
-            .and_then(|id| self.shell.thread(id))
+            .and_then(|id| self.shell().thread(id))
         {
             return Some(t.model_selection.clone());
         }
-        let config = self.config.as_ref()?;
+        let config = self.config()?;
         let project_default = self
             .draft_project
             .as_deref()
-            .and_then(|p| self.shell.project(p))
+            .and_then(|p| self.shell().project(p))
             .and_then(|p| p.default_model_selection.clone());
         project_default
             .or_else(|| config.default_model_selection())
@@ -525,7 +694,9 @@ impl App {
         if text.is_empty() {
             return;
         }
-        let Some(session) = &self.session else { return };
+        let Some(session) = self.session() else {
+            return;
+        };
         let Some(model) = self.effective_model() else {
             self.toast("No provider is ready on this server", tx);
             return;
@@ -564,8 +735,7 @@ impl App {
                     return;
                 };
                 let runtime = self
-                    .config
-                    .as_ref()
+                    .config()
                     .map_or("full-access".to_owned(), |c| c.default_runtime_mode());
                 session.launch(protocol::launch_thread(&project, &text, &model, &runtime));
             }
@@ -574,12 +744,11 @@ impl App {
     }
 
     pub fn stop(&mut self) {
-        let (Some(session), Some(t)) = (&self.session, &self.thread) else {
+        let (Some(session), Some(t)) = (self.session(), &self.thread) else {
             return;
         };
         let thread_stop = self
-            .config
-            .as_ref()
+            .config()
             .is_some_and(|c| c.environment.capability("threadStop"));
         if let Some(cmd) = protocol::stop(
             &t.thread.id,
@@ -591,14 +760,14 @@ impl App {
     }
 
     pub fn respond(&mut self, request_id: &str, decision: &str) {
-        let (Some(session), Some(id)) = (&self.session, &self.selected) else {
+        let (Some(session), Some(id)) = (self.session(), &self.selected) else {
             return;
         };
         session.dispatch(protocol::respond_decision(id, request_id, decision));
     }
 
     pub fn answer(&mut self, request_id: &str) {
-        let (Some(session), Some(id)) = (&self.session, &self.selected) else {
+        let (Some(session), Some(id)) = (self.session(), &self.selected) else {
             return;
         };
         let picks = self.answers.remove(request_id).unwrap_or_default();
@@ -633,13 +802,13 @@ impl App {
     /// output (`commandOutputStreaming`), else the settled output once.
     pub fn toggle_output(&mut self, item_id: &str) {
         if self.outputs.remove(item_id).is_some() {
-            if let Some(session) = &self.session {
+            if let Some(session) = self.session() {
                 session.unsubscribe(output_key(item_id));
             }
             return;
         }
         let (Some(session), Some(thread), Some(handle)) =
-            (&self.session, &self.thread, HANDLE.get().cloned())
+            (self.session(), &self.thread, HANDLE.get().cloned())
         else {
             return;
         };
@@ -653,8 +822,7 @@ impl App {
         let payload = serde_json::json!({ "threadId": thread.thread.id, "itemId": item_id });
         let id = item_id.to_owned();
         let streaming = self
-            .config
-            .as_ref()
+            .config()
             .is_some_and(|c| c.environment.capability("commandOutputStreaming"));
         if streaming {
             session.subscribe(
@@ -702,7 +870,7 @@ impl App {
     }
 
     fn close_outputs(&mut self) {
-        if let Some(session) = &self.session {
+        if let Some(session) = self.session() {
             for id in self.outputs.keys() {
                 session.unsubscribe(output_key(id));
             }
@@ -767,7 +935,7 @@ impl App {
         if self.diff.loaded.as_ref() == Some(&want) {
             return;
         }
-        let (Some(session), Some(handle)) = (&self.session, HANDLE.get().cloned()) else {
+        let (Some(session), Some(handle)) = (self.session(), HANDLE.get().cloned()) else {
             return;
         };
         self.diff.loaded = Some(want);
@@ -890,16 +1058,25 @@ impl App {
                 action: PaletteAction::Theme(id),
             });
         }
-        let threads = self.shell.sidebar_projects().into_iter().flat_map(|p| {
-            self.shell
-                .project_threads(&p.id)
-                .into_iter()
-                .map(move |t| PaletteItem {
-                    group: "Threads",
-                    label: t.title.clone(),
-                    detail: Some(p.title.clone()),
-                    shortcut: None,
-                    action: PaletteAction::OpenThread(t.id.clone()),
+        let many = self.envs.len() > 1;
+        let threads = self.envs.iter().enumerate().flat_map(|(env, e)| {
+            e.shell
+                .threads
+                .iter()
+                .filter(|t| t.is_sidebar_row())
+                .map(move |t| {
+                    let project = e.shell.project(&t.project_id).map_or("", |p| &p.title);
+                    PaletteItem {
+                        group: "Threads",
+                        label: t.title.clone(),
+                        detail: Some(if many {
+                            format!("{project} · {}", e.label())
+                        } else {
+                            project.to_owned()
+                        }),
+                        shortcut: None,
+                        action: PaletteAction::OpenThread(env, t.id.clone()),
+                    }
                 })
         });
         let mut ranked: Vec<(usize, u8, PaletteItem)> = actions
@@ -935,7 +1112,7 @@ impl App {
             PaletteAction::ToggleFiles => self.toggle_inspector(Inspector::Files),
             PaletteAction::Settings => self.toggle_settings(),
             PaletteAction::ToggleSidebar => self.sidebar.toggle(),
-            PaletteAction::OpenThread(id) => self.open_thread(Some(id)),
+            PaletteAction::OpenThread(env, id) => self.open_thread_in(env, id),
             PaletteAction::Theme(id) => self.set_theme(&id, tx),
         }
     }
@@ -967,8 +1144,7 @@ impl App {
             return;
         };
         let provider = self.effective_model().and_then(|m| {
-            self.config
-                .as_ref()?
+            self.config()?
                 .providers
                 .iter()
                 .find(|p| p.instance_id == m.instance_id)
@@ -984,13 +1160,13 @@ impl App {
                         let project = self
                             .selected
                             .as_deref()
-                            .and_then(|id| self.shell.thread(id))
+                            .and_then(|id| self.shell().thread(id))
                             .map(|t| t.project_id.clone())
                             .or(self.draft_project.clone())?;
-                        Some(self.shell.project(&project)?.workspace_root.clone())
+                        Some(self.shell().project(&project)?.workspace_root.clone())
                     });
                 let (Some(cwd), Some(session), Some(handle)) =
-                    (cwd, &self.session, HANDLE.get().cloned())
+                    (cwd, self.session(), HANDLE.get().cloned())
                 else {
                     self.menu = None;
                     return;
@@ -1242,15 +1418,12 @@ impl App {
         });
     }
 
-    pub fn forget(&mut self) {
-        pairing::forget_credential();
-        self.session = None;
-        self.cred = None;
-        self.config = None;
-        self.shell = ShellState::default();
-        self.thread = None;
-        self.selected = None;
-        self.screen = Screen::pairing(None);
+    /// Unpairs one environment; with none left, back to pairing.
+    pub fn forget(&mut self, idx: usize) {
+        self.remove_env(idx);
+        if self.envs.is_empty() {
+            self.screen = Screen::pairing(None);
+        }
     }
 }
 
@@ -1278,7 +1451,10 @@ fn poll(s: &mut App, _now: f64, tx: &mut Tx) -> bool {
     let before = s.toasts.len();
     s.toasts.retain(|t| t.2 > now);
     let mut changed = s.toasts.len() != before;
-    let working = s.shell.threads.iter().any(|t| t.is_working())
+    let working = s
+        .envs
+        .iter()
+        .any(|e| e.shell.threads.iter().any(|t| t.is_working()))
         || s.thread.as_ref().is_some_and(|t| t.is_working());
     if working && now != s.clock {
         s.clock = now;
@@ -1389,11 +1565,27 @@ fn load_fixture(s: &mut App) {
         return;
     };
     let items = |k: &str| fixture[k].as_array().cloned().unwrap_or_default();
+    // One captured environment, as if paired locally.
+    s.envs = vec![Env {
+        cred: Credential {
+            http_base: "http://127.0.0.1:1/".into(),
+            environment_id: "fixture".into(),
+            label: "fixture".into(),
+            access_token: String::new(),
+        },
+        session: None,
+        status: Status::Connected,
+        config: None,
+        shell: ShellState::default(),
+    }];
+    s.focus = 0;
+    let mut themes = Vec::new();
+    let env = &mut s.envs[0];
     for v in items("config") {
         match serde_json::from_value::<ServerConfigEvent>(v) {
-            Ok(ServerConfigEvent::Snapshot { config }) => s.config = Some(config),
+            Ok(ServerConfigEvent::Snapshot { config }) => env.config = Some(config),
             Ok(ServerConfigEvent::EnvironmentThemesUpdated { payload }) => {
-                s.env_themes = payload
+                themes = payload
                     .themes
                     .iter()
                     .filter_map(t3_theme::environment_theme)
@@ -1404,7 +1596,7 @@ fn load_fixture(s: &mut App) {
     }
     for v in items("shell") {
         if let Ok(item) = serde_json::from_value(v) {
-            s.shell.apply(item);
+            env.shell.apply(item);
         }
     }
     for v in items("thread") {
@@ -1417,8 +1609,8 @@ fn load_fixture(s: &mut App) {
             s.thread = Some(ThreadState::from_snapshot(sequence, *projection));
         }
     }
+    s.env_themes = themes;
     s.screen = Screen::Main;
-    s.status = Status::Connected;
     s.rebuild_looks();
 }
 

@@ -353,33 +353,95 @@ pub fn credential_path() -> Option<std::path::PathBuf> {
     Some(base.join("t3-rune").join("credential.json"))
 }
 
-pub fn load_credential() -> Option<Credential> {
-    serde_json::from_slice(&std::fs::read(credential_path()?).ok()?).ok()
+/// Every saved environment, in the order they were paired. Falls back to the single
+/// `credential.json` older builds wrote.
+pub fn load_credentials() -> Vec<Credential> {
+    let read = |p: std::path::PathBuf| std::fs::read(p).ok();
+    if let Some(list) = credentials_path()
+        .and_then(read)
+        .and_then(|b| serde_json::from_slice(&b).ok())
+    {
+        return list;
+    }
+    credential_path()
+        .and_then(read)
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .into_iter()
+        .collect()
 }
 
-pub fn save_credential(cred: &Credential) -> Result<()> {
-    let path = credential_path().ok_or_else(|| anyhow!("no config directory"))?;
+/// The first saved environment; the examples use it.
+pub fn load_credential() -> Option<Credential> {
+    load_credentials().into_iter().next()
+}
+
+fn credentials_path() -> Option<std::path::PathBuf> {
+    Some(credential_path()?.with_file_name("credentials.json"))
+}
+
+/// Replaces the credential for the same environment, or adds it at the end.
+fn upsert(list: &mut Vec<Credential>, cred: &Credential) {
+    match list
+        .iter_mut()
+        .find(|c| c.environment_id == cred.environment_id)
+    {
+        Some(c) => *c = cred.clone(),
+        None => list.push(cred.clone()),
+    }
+}
+
+fn write_credentials(list: &[Credential]) -> Result<()> {
+    let path = credentials_path().ok_or_else(|| anyhow!("no config directory"))?;
     std::fs::create_dir_all(path.parent().unwrap())?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(cred)?)?;
+    std::fs::write(&tmp, serde_json::to_vec_pretty(list)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
     }
     std::fs::rename(tmp, path)?;
+    // The list now holds whatever the legacy file did.
+    if let Some(old) = credential_path() {
+        let _ = std::fs::remove_file(old);
+    }
     Ok(())
 }
 
-pub fn forget_credential() {
-    if let Some(p) = credential_path() {
-        let _ = std::fs::remove_file(p);
-    }
+pub fn save_credential(cred: &Credential) -> Result<()> {
+    let mut list = load_credentials();
+    upsert(&mut list, cred);
+    write_credentials(&list)
+}
+
+/// Forgets one environment; the others stay paired.
+pub fn forget_credential(environment_id: &str) {
+    let mut list = load_credentials();
+    list.retain(|c| c.environment_id != environment_id);
+    let _ = write_credentials(&list);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pairing_again_replaces_that_environment_only() {
+        let cred = |env: &str, token: &str| Credential {
+            http_base: format!("http://{env}:1/"),
+            environment_id: env.into(),
+            label: env.into(),
+            access_token: token.into(),
+        };
+        let mut list = vec![cred("a", "1"), cred("b", "1")];
+        upsert(&mut list, &cred("a", "2"));
+        upsert(&mut list, &cred("c", "1"));
+        let got: Vec<_> = list
+            .iter()
+            .map(|c| (c.environment_id.as_str(), c.access_token.as_str()))
+            .collect();
+        assert_eq!(got, [("a", "2"), ("b", "1"), ("c", "1")]);
+    }
 
     #[test]
     fn parses_every_link_form() {

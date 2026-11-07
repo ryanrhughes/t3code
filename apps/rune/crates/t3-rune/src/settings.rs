@@ -6,7 +6,8 @@ use rune_kit::{Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant
 use serde_json::{Value, json};
 
 use crate::theme::{self, Look};
-use crate::{App, HANDLE, Popup};
+use crate::{App, Env, HANDLE, Popup};
+use t3_client::session::Status;
 
 /// `RuntimeMode`, labelled as the web's `runtimeModeConfig`.
 const ACCESS_MODES: &[(&str, &str, &str)] = &[
@@ -39,10 +40,20 @@ impl App {
         self.composer.focused = !self.settings_open;
     }
 
+    /// The machine whose server settings the page shows.
+    fn settings_env(&self) -> Option<&Env> {
+        self.envs
+            .get(self.settings_env)
+            .or_else(|| self.envs.first())
+    }
+
     /// Patches the server's settings; the reply (or a `settingsUpdated` event) brings the new
     /// values, so the screen only ever shows what the server holds.
     pub fn update_settings(&mut self, patch: Value) {
-        let (Some(session), Some(handle)) = (&self.session, HANDLE.get().cloned()) else {
+        let (Some(env), Some(handle)) = (self.settings_env(), HANDLE.get().cloned()) else {
+            return;
+        };
+        let (Some(session), env_id) = (env.session.clone(), env.cred.environment_id.clone()) else {
             return;
         };
         session.call(
@@ -51,7 +62,8 @@ impl App {
             move |result| {
                 handle.update(move |s: &mut App, tx| match result {
                     Ok(settings) => {
-                        if let Some(c) = s.config.as_mut() {
+                        let env = s.env_index(&env_id);
+                        if let Some(c) = env.and_then(|i| s.envs[i].config.as_mut()) {
                             c.settings = settings;
                         }
                     }
@@ -62,7 +74,35 @@ impl App {
     }
 
     fn server_setting(&self, key: &str) -> Option<&Value> {
-        self.config.as_ref()?.settings.get(key)
+        self.settings_env()?.config.as_ref()?.settings.get(key)
+    }
+
+    /// Pairs another machine from a link, keeping the ones already paired.
+    pub fn add_machine(&mut self) {
+        let text = self.add_link.text.trim().to_owned();
+        if self.adding || text.is_empty() {
+            return;
+        }
+        let Some(handle) = HANDLE.get().cloned() else {
+            return;
+        };
+        self.adding = true;
+        self.add_error = None;
+        std::thread::spawn(move || {
+            let result = t3_client::session::pair_blocking(&text).map_err(|e| e.to_string());
+            handle.update(move |s: &mut App, tx| {
+                s.adding = false;
+                match result {
+                    Ok(cred) => {
+                        let label = cred.label.clone();
+                        s.add_link = rune::TextEdit::new("");
+                        s.start(cred);
+                        s.toast(format!("Paired with {label}"), tx);
+                    }
+                    Err(e) => s.add_error = Some(e),
+                }
+            });
+        });
     }
 }
 
@@ -128,7 +168,7 @@ pub fn page(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
             ),
         ));
 
-    let body = if s.config.is_none() {
+    let body = if s.settings_env().and_then(|e| e.config.as_ref()).is_none() {
         col().w_full().child(
             text("Connect to a server to change its settings")
                 .font(k.ty.ui)
@@ -192,37 +232,74 @@ pub fn page(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                 "continueThreadsAfterServerUpdate",
                 flag("continueThreadsAfterServerUpdate", true),
             ));
-        col()
-            .w_full()
-            .gap(20.0)
-            .child(threads)
-            .child(responses)
-            .child(updates)
+        let mut body = col().w_full().gap(20.0);
+        if s.envs.len() > 1 {
+            body = body.child(section(look, "Server settings").child(setting_row(
+                look,
+                "Machine",
+                "These settings belong to one machine's server.",
+                machine_select(s, look, layer),
+            )));
+        }
+        body.child(threads).child(responses).child(updates)
     };
 
-    let server = s
-        .config
-        .as_ref()
-        .map(|c| c.environment.label.clone())
-        .unwrap_or_default();
-    let connection = section(look, "Connection").child(setting_row(
-        look,
-        if server.is_empty() {
-            "Not connected"
+    let mut connection = section(look, "Machines");
+    for (i, e) in s.envs.iter().enumerate() {
+        let state = match &e.status {
+            Status::Connected => "Connected".to_owned(),
+            Status::Connecting => "Connecting…".to_owned(),
+            Status::Reconnecting { reason, .. } => format!("Reconnecting: {reason}"),
+        };
+        connection = connection.child(
+            setting_row(
+                look,
+                e.label(),
+                &format!("{} · {state}", e.cred.http_base.trim_end_matches('/')),
+                Button::new("Unpair")
+                    .variant(ButtonVariant::Outline)
+                    .control_size(ControlSize::Small)
+                    .on_press(move |s: &mut App| {
+                        if s.envs.len() == 1 {
+                            s.settings_open = false;
+                        }
+                        s.forget(i);
+                    })
+                    .build(k)
+                    .key(format!("unpair-{i}")),
+            )
+            .key(format!("machine-{i}")),
+        );
+    }
+    let field = rune_kit::TextInput::new(&s.add_link)
+        .label("Pairing link")
+        .placeholder("Pairing link from another machine (t3 pair, or Settings → Connections)")
+        .on_edit(|s: &mut App| &mut s.add_link)
+        .on_submit(|s: &mut App, _| s.add_machine())
+        .build(k)
+        .key("add-link");
+    let add = Button::new(if s.adding { "Pairing…" } else { "Add" })
+        .variant(if s.adding {
+            ButtonVariant::Loading
         } else {
-            &server
-        },
-        s.cred.as_ref().map_or("", |c| c.http_base.as_str()),
-        Button::new("Unpair")
-            .variant(ButtonVariant::Outline)
-            .control_size(ControlSize::Small)
-            .on_press(|s: &mut App| {
-                s.settings_open = false;
-                s.forget();
-            })
-            .build(k)
-            .key("settings-unpair"),
-    ));
+            ButtonVariant::Outline
+        })
+        .control_size(ControlSize::Small)
+        .on_press(|s: &mut App| s.add_machine())
+        .build(k)
+        .key("add-machine");
+    let mut adder = col().w_full().gap(6.0).child(
+        row()
+            .w_full()
+            .gap(8.0)
+            .center_y()
+            .child(field.grow(1.0))
+            .child(add),
+    );
+    if let Some(e) = &s.add_error {
+        adder = adder.child(text(e.clone()).font(k.ty.small).color(look.error_fg).wrap());
+    }
+    connection = connection.child(adder);
 
     col()
         .key("settings")
@@ -350,6 +427,24 @@ fn access_select(s: &App, mode: &str, look: &Look, layer: &mut Vec<El>) -> El {
         })
         .build(&look.kit, layer)
         .key("settings-access-select")
+}
+
+fn machine_select(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
+    let labels: Vec<String> = s.envs.iter().map(|e| e.label().to_owned()).collect();
+    let current = s.settings_env().map(|e| e.label().to_owned());
+    rune_kit::Select::new("settings-machine", &labels)
+        .current(current.as_deref())
+        .open(s.popup == Some(Popup::SettingsMachine))
+        .on_toggle(|s: &mut App| s.popup = toggled(s.popup, Popup::SettingsMachine))
+        .on_close(|s: &mut App| s.popup = None)
+        .on_choose(move |s: &mut App, label: &str, _: &mut rune::Tx| {
+            s.popup = None;
+            if let Some(i) = s.envs.iter().position(|e| e.label() == label) {
+                s.settings_env = i;
+            }
+        })
+        .build(&look.kit, layer)
+        .key("settings-machine-select")
 }
 
 fn toggled(current: Option<Popup>, popup: Popup) -> Option<Popup> {
