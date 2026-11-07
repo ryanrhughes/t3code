@@ -533,6 +533,48 @@ jobs:
             cargo test --locked --manifest-path "native/$crate/Cargo.toml"
           done
 
+  # apps/rune: the native Rune client, its own Cargo workspace. Its contract schema and theme
+  # fixtures are generated from TypeScript, so a stale one fails here.
+  rune:
+    name: Rune client
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rune != 'false' }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          task-cache-read-token: ${{ secrets.T3_TASK_CACHE_READ_TOKEN }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check generated schema and fixtures
+        run: |
+          node apps/rune/scripts/export-contract-schemas.ts
+          node apps/rune/scripts/export-builtin-themes.ts
+          node apps/rune/scripts/theme-reference.ts
+          git diff --exit-code -- apps/rune
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path apps/rune/Cargo.toml --all -- --check
+
+      # The UI crate needs a window system to build; these three don't.
+      - name: Test client, theme and contracts
+        run: cargo test --locked --manifest-path apps/rune/Cargo.toml -p t3-client -p t3-theme -p t3-contracts
+
   mobile_native_static_analysis:
     name: Mobile Native Static Analysis
     needs: changes

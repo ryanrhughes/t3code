@@ -180,6 +180,7 @@ export default defineConfig({
       "**/*.graphql.ts",
       "packages/source-control-github/schema/**",
       "apps/server/schema/**",
+      "apps/rune/crates/t3-contracts/schema/**",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
       "apps/mobile/uniwind-types.d.ts",

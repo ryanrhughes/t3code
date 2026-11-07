@@ -31,6 +31,11 @@ const EXTRA_OWNERS = [
   [/^docs\/user\/t3-connect-troubleshooting\.md$/, ["t3"]],
 ];
 const RUST = /^native\/(resource-monitor|kde-snap-shot|hyprland-snap-shot)\//;
+// apps/rune is its own Cargo workspace with no JS package to own it. Its schema and theme
+// fixtures are generated from these TypeScript sources, so they rerun its freshness check too.
+const RUNE = /^apps\/rune\//;
+const RUNE_INPUTS =
+  /^(packages\/contracts\/src\/|packages\/shared\/src\/themePalettes\.ts$|apps\/web\/src\/themePalette\.ts$)/;
 
 // These tests read other packages without declaring dependencies.
 const TEST_ONLY_DEPS = {
@@ -114,9 +119,15 @@ function decide(files, packages, full) {
   let affected = new Set();
   let everything = full || files === null;
   let rust = false;
+  let rune = false;
 
   for (const file of files ?? []) {
     if (RUST.test(file)) rust = true;
+    if (RUNE_INPUTS.test(file)) rune = true;
+    if (RUNE.test(file)) {
+      rune = true;
+      continue;
+    }
     const owners = ownersOf(file, packages);
     if (owners === null) {
       everything = true;
@@ -163,6 +174,7 @@ function decide(files, packages, full) {
       test_web: has("@t3tools/web"),
       test_server: has("t3"),
       rust: everything || rust,
+      rune: everything || rune,
       release_smoke: scriptsChanged,
       mobile_native: files === null || files.some((file) => MOBILE_NATIVE.test(file)),
     },

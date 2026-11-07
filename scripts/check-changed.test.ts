@@ -48,6 +48,16 @@ describe("check:changed", () => {
     assert.deepStrictEqual(decide(["docs/user/install.md"], packages, false).affected, []);
   });
 
+  it("runs only the Rune job for apps/rune and reruns it when its TypeScript inputs change", () => {
+    const packages = readWorkspace();
+    const rune = decide(["apps/rune/crates/t3-client/src/rpc.rs"], packages, false);
+    assert.isTrue(rune.outputs.rune);
+    assert.deepStrictEqual(rune.affected, []);
+    assert.isTrue(decide(["packages/contracts/src/rpc.ts"], packages, false).outputs.rune);
+    assert.isTrue(decide(["apps/web/src/themePalette.ts"], packages, false).outputs.rune);
+    assert.isFalse(decide(["apps/web/src/main.tsx"], packages, false).outputs.rune);
+  });
+
   it.effect(
     "keeps weighted steps within the budget, in order, and serial steps one at a time",
     () =>

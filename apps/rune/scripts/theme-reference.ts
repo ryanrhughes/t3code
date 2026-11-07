@@ -2,7 +2,6 @@
 // which the Rust parity tests replay. Run from the repo root after `vp i`:
 //   node apps/rune/scripts/theme-reference.ts
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import {
@@ -25,10 +24,9 @@ const omarchy = {
   // The server names published themes by file; the wire carries the id.
   id: "omarchy",
   ...JSON.parse(
-    NodeFS.readFileSync(
-      NodePath.resolve(NodeOS.homedir(), ".t3/userdata/themes/omarchy.json"),
-      "utf8",
-    ),
+    // What Omarchy's theme-set hook writes to <T3 home>/userdata/themes/omarchy.json (Tokyo
+    // Night), kept here so the fixture is the same on every machine.
+    NodeFS.readFileSync(NodePath.resolve(import.meta.dirname, "fixtures/omarchy.json"), "utf8"),
   ),
 };
 
