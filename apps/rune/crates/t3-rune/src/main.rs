@@ -73,12 +73,16 @@ pub struct App {
     pub popup: Option<Popup>,
     /// Selected options per pending question: request id → question id → values.
     pub answers: HashMap<String, HashMap<String, Vec<String>>>,
-    pub toasts: Vec<(u64, String)>,
+    /// (id, message, wall-clock second it expires at).
+    pub toasts: Vec<(u64, String, i64)>,
     next_toast: u64,
     /// Reasoning rows the user opened.
     pub expanded: HashSet<String>,
     /// Bumped whenever the looks are rebuilt, so memoized rows repaint on a theme change.
     pub theme_generation: u64,
+    /// Wall-clock seconds, advanced once a second only while something works, so elapsed
+    /// labels update without any continuous animation.
+    pub clock: i64,
 }
 
 impl App {
@@ -113,6 +117,7 @@ impl App {
             next_toast: 0,
             expanded: HashSet::new(),
             theme_generation: 0,
+            clock: now_secs(),
         };
         match cred {
             Some(c) => app.start(c),
@@ -146,12 +151,15 @@ impl App {
     pub fn toast(&mut self, msg: impl Into<String>, tx: &mut Tx) {
         self.next_toast += 1;
         let id = self.next_toast;
-        self.toasts.push((id, msg.into()));
-        self.toasts.truncate(4);
+        self.toasts.push((id, msg.into(), now_secs() + 6));
+        if self.toasts.len() > 4 {
+            self.toasts.remove(0);
+        }
         tx.wake_after(std::time::Duration::from_secs(6));
     }
 
     fn on_event(&mut self, ev: ClientEvent, tx: &mut Tx) {
+        DIAG_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match ev {
             ClientEvent::Status(s) => self.status = s,
             ClientEvent::Config(ev) => match ev {
@@ -498,12 +506,55 @@ pub fn focused(text: &str) -> TextEdit {
 }
 
 /// Toasts expire on the wake their creation scheduled.
-fn poll(s: &mut App, _now: f64, _tx: &mut Tx) -> bool {
+/// Runs before every frame and on `wake_after`; returns true only when something visible changed.
+fn poll(s: &mut App, _now: f64, tx: &mut Tx) -> bool {
+    DIAG_POLLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let now = now_secs();
     let before = s.toasts.len();
-    if before > 0 {
-        s.toasts.remove(0);
+    s.toasts.retain(|t| t.2 > now);
+    let mut changed = s.toasts.len() != before;
+    let working = s.shell.threads.iter().any(|t| t.is_working())
+        || s.thread.as_ref().is_some_and(|t| t.is_working());
+    if working && now != s.clock {
+        s.clock = now;
+        changed = true;
     }
-    s.toasts.len() != before
+    if working || !s.toasts.is_empty() {
+        tx.wake_after(std::time::Duration::from_secs(1));
+    }
+    if changed {
+        DIAG_CHANGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    changed
+}
+
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+static DIAG_EVENTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static DIAG_POLLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static DIAG_CHANGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// `T3_RUNE_FRAMES=1` prints frames drawn per second to stderr: an idle window should print 0.
+fn frame_counter() -> impl FnMut(&rune::FrameEncoded) {
+    let (mut window, mut drawn) = (std::time::Instant::now(), 0u32);
+    move |f| {
+        if matches!(f.outcome(), rune::FrameOutcome::Drawn) {
+            drawn += 1;
+        }
+        if window.elapsed() >= std::time::Duration::from_secs(1) {
+            let events = DIAG_EVENTS.swap(0, std::sync::atomic::Ordering::Relaxed);
+            let polls = DIAG_POLLS.swap(0, std::sync::atomic::Ordering::Relaxed);
+            let changed = DIAG_CHANGED.swap(0, std::sync::atomic::Ordering::Relaxed);
+            eprintln!(
+                "t3-rune: {drawn} frames drawn in the last second ({events} server events, {polls} polls, {changed} changed)"
+            );
+            (window, drawn) = (std::time::Instant::now(), 0);
+        }
+    }
 }
 
 fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
@@ -589,6 +640,8 @@ pub const SCENES: &[(&str, fn(&mut App))] = &[
 ];
 
 fn main() {
+    // Window managers match the window by this (Hyprland's `class`, a .desktop file's StartupWMClass).
+    rune::set_app_id("com.t3tools.T3Code.Rune");
     rune::prewarm_gpu();
     let mut fonts: Vec<&'static [u8]> = rune_theme_opencode::FONTS.to_vec();
     fonts.shrink_to_fit();
@@ -606,7 +659,38 @@ fn main() {
         traffic_lights: Some((16.0, 25.0)),
         drag_regions: true,
     };
-    let app = rune::App::new(spec).chrome(chrome);
+    let mut app = rune::App::new(spec).chrome(chrome);
+    if std::env::var_os("T3_RUNE_FRAMES").is_some() {
+        app = app.on_frame_encoded(frame_counter());
+        // Names what keeps a resting window drawing: looping or moving elements, once a second.
+        let mut last = std::time::Instant::now();
+        app = app.on_frame_drawn(move |rt: &rune::Runtime<App>| {
+            if last.elapsed() < std::time::Duration::from_secs(1) {
+                return;
+            }
+            last = std::time::Instant::now();
+            let busy: Vec<String> = rt
+                .elements()
+                .into_iter()
+                .filter(|e| e.moving || e.loop_phase.is_some() || e.revealing || e.in_growing_row)
+                .map(|e| {
+                    format!(
+                        "{}{}",
+                        e.key.unwrap_or(e.path),
+                        if e.loop_phase.is_some() {
+                            " (loop)"
+                        } else {
+                            ""
+                        }
+                    )
+                })
+                .take(8)
+                .collect();
+            if !busy.is_empty() {
+                eprintln!("t3-rune: animating: {}", busy.join(", "));
+            }
+        });
+    }
     let _ = HANDLE.set(app.handle());
     app.run();
 }

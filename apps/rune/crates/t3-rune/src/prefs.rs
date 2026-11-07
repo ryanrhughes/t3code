@@ -49,7 +49,12 @@ impl Prefs {
             _ => AppearanceMode::System,
         };
         ThemePreference {
-            theme: self.theme.clone(),
+            // An older build saved "" here from an empty server default.
+            theme: if self.theme.trim().is_empty() {
+                "system".into()
+            } else {
+                self.theme.clone()
+            },
             mode,
             halves: Default::default(),
         }

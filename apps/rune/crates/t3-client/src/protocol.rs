@@ -91,7 +91,13 @@ impl ServerConfig {
 
     /// `t3 theme set <id>` writes these; clients adopt each `(theme, setAt)` generation once.
     pub fn default_theme(&self) -> Option<(String, String)> {
-        let theme = self.settings.get("defaultTheme")?.as_str()?.to_owned();
+        // The server keeps an empty `defaultTheme` when none was ever set.
+        let theme = self
+            .settings
+            .get("defaultTheme")?
+            .as_str()
+            .filter(|t| !t.trim().is_empty())?
+            .to_owned();
         let at = self
             .settings
             .get("defaultThemeSetAt")
@@ -200,6 +206,8 @@ pub struct ThreadShell {
     /// `"idle"` or a run status (`preparing|queued|starting|running|waiting|completed|…`).
     pub status: String,
     pub active_run_id: Option<String>,
+    /// When the current run began; the UI shows "Working for 1m 4s" from it.
+    pub activity_run_started_at: Option<String>,
     pub pending_runtime_request: Option<Value>,
     pub latest_visible_message: Option<LatestMessage>,
     pub created_at: String,
@@ -690,6 +698,25 @@ mod tests {
                 item.is_streaming()
             ),
             ("assistant_message", Some("Hel"), true)
+        );
+    }
+
+    #[test]
+    fn an_empty_server_default_theme_is_no_default() {
+        let config = |settings| ServerConfig {
+            settings,
+            ..Default::default()
+        };
+        assert_eq!(
+            config(json!({ "defaultTheme": "", "defaultThemeSetAt": "" })).default_theme(),
+            None
+        );
+        assert_eq!(
+            config(
+                json!({ "defaultTheme": "omarchy", "defaultThemeSetAt": "2026-11-07T00:00:00Z" })
+            )
+            .default_theme(),
+            Some(("omarchy".into(), "2026-11-07T00:00:00Z".into()))
         );
     }
 

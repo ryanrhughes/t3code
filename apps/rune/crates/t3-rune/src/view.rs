@@ -22,6 +22,12 @@ static PLUS: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M8 3.5V12.5M3.5 8H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>"#,
 };
+/// The web's working marker (`CircleDashedIcon`): static, so a working thread never repaints.
+static WORKING: Icon = Icon {
+    name: "t3-working",
+    view: 16.0,
+    body: r#"<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.4 2.2" fill="none"/>"#,
+};
 static STOP: Icon = Icon {
     name: "t3-stop",
     view: 16.0,
@@ -65,7 +71,7 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
     };
     if !s.toasts.is_empty() {
         let k = &look.kit;
-        let region = s.toasts.iter().fold(ToastRegion::new(), |r, (id, msg)| {
+        let region = s.toasts.iter().fold(ToastRegion::new(), |r, (id, msg, _)| {
             let id = *id;
             r.toast(
                 Toast::new(format!("toast-{id}"), msg.clone())
@@ -278,11 +284,18 @@ fn entries(s: &App) -> Vec<Entry> {
             } else {
                 None
             };
+            let detail = match (
+                status,
+                t.activity_run_started_at.as_deref().and_then(parse_iso),
+            ) {
+                (Some(Status3::Busy), Some(start)) => elapsed(s.clock - start),
+                _ => age(&t.updated_at, now),
+            };
             out.push(Entry::Thread {
                 id: t.id.clone(),
                 title: t.title.clone(),
                 status,
-                age: age(&t.updated_at, now),
+                age: detail,
             });
         }
     }
@@ -402,7 +415,9 @@ fn entry_row(e: &Entry, selected: Option<&str>, k: &Kit) -> El {
                 .selected(selected == Some(id.as_str()))
                 .on_select(move |s: &mut App, _| s.open_thread(Some(open.clone())));
             r = match status {
-                Some(Status3::Busy) => r.status(RowStatus::Busy),
+                Some(Status3::Busy) => r.status(RowStatus::Other(
+                    rune::icon(&WORKING, 14.0).color(k.c.text_accent),
+                )),
                 Some(Status3::Attention) => r.status(RowStatus::Attention),
                 None => r,
             };
@@ -525,8 +540,10 @@ fn timeline(s: &App, look: &Look) -> El {
                                     .py(10.0)
                                     .gap(8.0)
                                     .center_y()
-                                    .child(Spinner::new().size(12.0).build(k))
-                                    .child(text("Working…").font(k.ty.small).color(look.muted)),
+                                    .child(rune::icon(&WORKING, 14.0).color(k.c.text_accent))
+                                    .child(
+                                        text(working_label(s)).font(k.ty.small).color(look.muted),
+                                    ),
                             );
                         };
                         let item = &r.item;
@@ -699,7 +716,9 @@ fn turn_item(s: &App, look: &Look, item: &TurnItem) -> El {
                         .grow(1.0),
                 );
             line = match (item.status.as_str(), item.exit_code) {
-                ("running" | "pending", _) => line.child(Spinner::new().size(12.0).build(k)),
+                ("running" | "pending", _) => {
+                    line.child(rune::icon(&WORKING, 12.0).color(k.c.text_accent))
+                }
                 (_, Some(code)) if failed => line.child(
                     text(format!("exit {code}"))
                         .font(k.ty.small)
@@ -829,9 +848,32 @@ fn tool_line(
         r = r.child(el().grow(1.0));
     }
     if matches!(item.status.as_str(), "running" | "pending") || item.is_streaming() {
-        r = r.child(Spinner::new().size(11.0).build(k));
+        r = r.child(rune::icon(&WORKING, 11.0).color(k.c.text_accent));
     }
     r
+}
+
+/// "Working for 1m 4s", from the run's start; the clock ticks once a second while it works.
+fn working_label(s: &App) -> String {
+    match s
+        .thread
+        .as_ref()
+        .and_then(|t| t.thread.activity_run_started_at.as_deref())
+        .and_then(parse_iso)
+    {
+        Some(start) => format!("Working for {}", elapsed(s.clock - start)),
+        None => "Working".to_owned(),
+    }
+}
+
+/// "12s", "3m 4s", "1h 2m".
+fn elapsed(secs: i64) -> String {
+    let secs = secs.max(0);
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3600 => format!("{}m {}s", secs / 60, secs % 60),
+        _ => format!("{}h {}m", secs / 3600, secs % 3600 / 60),
+    }
 }
 
 fn approval(s: &App, look: &Look, item: &TurnItem) -> El {
