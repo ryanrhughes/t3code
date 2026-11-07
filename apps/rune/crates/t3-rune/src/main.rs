@@ -111,6 +111,8 @@ pub struct App {
     pub popup: Option<Popup>,
     /// The suggestion menu the composer's caret opened (`@` files, `/` commands, `$` skills).
     pub menu: Option<ComposerMenu>,
+    /// The command palette (Ctrl/Cmd+K), when open.
+    pub palette: Option<CommandPalette>,
     menu_seq: u64,
     /// Selected options per pending question: request id → question id → values.
     pub answers: HashMap<String, HashMap<String, Vec<String>>>,
@@ -139,6 +141,47 @@ pub struct CommandOutput {
     pub running: bool,
     pub loaded: bool,
     pub error: Option<String>,
+}
+
+pub struct CommandPalette {
+    pub query: TextEdit,
+    pub active: usize,
+}
+
+#[derive(Clone)]
+pub enum PaletteAction {
+    NewThread,
+    ToggleDiff,
+    ToggleSidebar,
+    OpenThread(String),
+    Theme(String),
+}
+
+pub struct PaletteItem {
+    pub group: &'static str,
+    pub label: String,
+    pub detail: Option<String>,
+    pub shortcut: Option<&'static str>,
+    pub action: PaletteAction,
+}
+
+/// How well `label` matches `query`, lower is better: whole-label prefix, then a word's start,
+/// then anywhere. `None` when it doesn't match.
+fn palette_rank(label: &str, query: &str) -> Option<u8> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    let (l, q) = (label.to_lowercase(), query.to_lowercase());
+    if l.starts_with(&q) {
+        Some(0)
+    } else if l
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|w| w.starts_with(&q))
+    {
+        Some(1)
+    } else {
+        l.contains(&q).then_some(2)
+    }
 }
 
 pub struct ComposerMenu {
@@ -229,6 +272,7 @@ impl App {
             outputs: HashMap::new(),
             menu: None,
             menu_seq: 0,
+            palette: None,
         };
         match cred {
             Some(c) => app.start(c),
@@ -716,6 +760,132 @@ impl App {
         });
     }
 
+    pub fn toggle_palette(&mut self) {
+        if self.palette.is_some() {
+            return self.close_palette();
+        }
+        // The palette's field takes the keyboard; the composer gets it back on close.
+        self.composer.focused = false;
+        self.palette = Some(CommandPalette {
+            query: focused(""),
+            active: 0,
+        });
+        self.menu = None;
+        self.popup = None;
+    }
+
+    pub fn close_palette(&mut self) {
+        self.palette = None;
+        self.composer.focused = true;
+    }
+
+    /// Palette rows for the current query, best matches first within each group.
+    pub fn palette_items(&self) -> Vec<PaletteItem> {
+        let query = self.palette.as_ref().map_or("", |p| p.query.text.trim());
+        let mut actions = vec![
+            PaletteItem {
+                group: "Actions",
+                label: "New thread".into(),
+                detail: None,
+                shortcut: Some("Ctrl N"),
+                action: PaletteAction::NewThread,
+            },
+            PaletteItem {
+                group: "Actions",
+                label: if self.diff_pane.is_open() {
+                    "Hide changes"
+                } else {
+                    "Show changes"
+                }
+                .into(),
+                detail: None,
+                shortcut: Some("Ctrl Shift D"),
+                action: PaletteAction::ToggleDiff,
+            },
+            PaletteItem {
+                group: "Actions",
+                label: "Toggle sidebar".into(),
+                detail: None,
+                shortcut: Some("Ctrl Shift B"),
+                action: PaletteAction::ToggleSidebar,
+            },
+        ];
+        for (id, label) in theme::choices(&self.env_themes) {
+            actions.push(PaletteItem {
+                group: "Themes",
+                label: format!("Theme: {label}"),
+                detail: None,
+                shortcut: None,
+                action: PaletteAction::Theme(id),
+            });
+        }
+        let threads = self.shell.sidebar_projects().into_iter().flat_map(|p| {
+            self.shell
+                .project_threads(&p.id)
+                .into_iter()
+                .map(move |t| PaletteItem {
+                    group: "Threads",
+                    label: t.title.clone(),
+                    detail: Some(p.title.clone()),
+                    shortcut: None,
+                    action: PaletteAction::OpenThread(t.id.clone()),
+                })
+        });
+        let mut ranked: Vec<(usize, u8, PaletteItem)> = actions
+            .into_iter()
+            .chain(threads)
+            .filter_map(|item| palette_rank(&item.label, query).map(|r| (r, item)))
+            .enumerate()
+            .map(|(i, (r, item))| (i, r, item))
+            .collect();
+        // Group order stays fixed; inside a group, better matches rise but keep their order.
+        let group_order = |g: &str| {
+            ["Actions", "Threads", "Themes"]
+                .iter()
+                .position(|x| *x == g)
+                .unwrap_or(9)
+        };
+        ranked.sort_by_key(|(i, r, item)| (group_order(item.group), *r, *i));
+        ranked
+            .into_iter()
+            .map(|(_, _, item)| item)
+            .take(60)
+            .collect()
+    }
+
+    pub fn run_palette(&mut self, index: usize, tx: &mut Tx) {
+        let Some(item) = self.palette_items().into_iter().nth(index) else {
+            return;
+        };
+        self.close_palette();
+        match item.action {
+            PaletteAction::NewThread => self.new_thread(None),
+            PaletteAction::ToggleDiff => self.toggle_diff(),
+            PaletteAction::ToggleSidebar => self.sidebar.toggle(),
+            PaletteAction::OpenThread(id) => self.open_thread(Some(id)),
+            PaletteAction::Theme(id) => self.set_theme(&id, tx),
+        }
+    }
+
+    /// Arrow keys move, Return runs, Escape closes. True when taken.
+    pub fn palette_key(&mut self, key: &rune::Key, tx: &mut Tx) -> bool {
+        let n = self.palette_items().len();
+        let Some(p) = self.palette.as_mut() else {
+            return false;
+        };
+        match key {
+            rune::Key::Escape => self.close_palette(),
+            rune::Key::Down if n > 0 => p.active = (p.active + 1) % n,
+            rune::Key::Up if n > 0 => p.active = (p.active + n - 1) % n,
+            rune::Key::Enter => {
+                let i = p.active;
+                self.run_palette(i, tx);
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Re-reads the trigger at the composer's caret after an edit and fills the menu for it.
     pub fn refresh_menu(&mut self) {
         use t3_client::composer::{TriggerKind, detect, file_link};
@@ -1039,6 +1209,10 @@ fn frame_counter() -> impl FnMut(&rune::FrameEncoded) {
 }
 
 fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    if ev.is_command('k') {
+        s.toggle_palette();
+        return true;
+    }
     // Ctrl/Cmd+Shift+D shows and hides the changes, as the web's toggle.
     if ev.mods.shift
         && (ev.mods.cmd || ev.mods.ctrl)
@@ -1173,6 +1347,10 @@ fn scene_command_output(s: &mut App) {
 pub const SCENES: &[(&str, fn(&mut App))] = &[
     ("command-output", scene_command_output),
     ("diff", scene_diff),
+    ("palette", |s| {
+        scene_theme(s, "omarchy", "dark");
+        s.toggle_palette();
+    }),
     ("fixture", load_fixture),
     ("omarchy", |s| scene_theme(s, "omarchy", "dark")),
     ("t3-light", |s| scene_theme(s, "light", "light")),

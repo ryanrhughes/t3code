@@ -74,6 +74,9 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
         } => pair_screen(look, link, error.as_deref(), *busy, local.as_ref()),
         Screen::Main => main_screen(s, cx, look, &mut layer),
     };
+    if s.palette.is_some() {
+        layer.push(palette(s, look));
+    }
     if !s.toasts.is_empty() {
         let k = &look.kit;
         let region = s.toasts.iter().fold(ToastRegion::new(), |r, (id, msg, _)| {
@@ -957,6 +960,116 @@ fn tool_line(
         r = r.child(rune::icon(&WORKING, 11.0).color(k.c.text_accent));
     }
     r
+}
+
+/// The command palette over a dimmed window: a search field and grouped rows.
+fn palette(s: &App, look: &Look) -> El {
+    let k = &look.kit;
+    let Some(p) = &s.palette else { return col() };
+    let items = s.palette_items();
+    let field = rune::text_input(&p.query, rune::TextStyle { ..k.ty.body })
+        .key("palette-input")
+        .w_full()
+        .color(look.text)
+        .placeholder("Search threads, actions and themes", k.c.text_faint)
+        .caret(look.text, k.selection())
+        .label("Command palette")
+        .on_edit(|s: &mut App| &mut s.palette.as_mut().expect("palette open").query)
+        .on_input_change(|s: &mut App, _| {
+            if let Some(p) = s.palette.as_mut() {
+                p.active = 0;
+            }
+        })
+        .on_input_key(|s: &mut App, ev: &rune::KeyEvent, tx| s.palette_key(&ev.key, tx));
+    let mut list = col().key("palette-rows").w_full().gap(2.0);
+    let mut group = "";
+    for (i, item) in items.iter().enumerate() {
+        if item.group != group {
+            group = item.group;
+            list = list.child(
+                text(group)
+                    .font(k.ty.small)
+                    .color(look.muted)
+                    .px(10.0)
+                    .pt(8.0)
+                    .pb(2.0),
+            );
+        }
+        let active = i == p.active;
+        let mut r = row()
+            .key(format!("palette-{i}"))
+            .w_full()
+            .px(10.0)
+            .py(7.0)
+            .gap(10.0)
+            .center_y()
+            .radius(k.radius.md)
+            .cursor(rune::Cursor::Pointer)
+            .on_press_tx(move |s: &mut App, tx| s.run_palette(i, tx))
+            .child(
+                text(item.label.clone())
+                    .font(k.ty.ui)
+                    .color(look.text)
+                    .truncate()
+                    .grow(1.0),
+            );
+        if active {
+            r = r.fill(k.c.bg_accent.alpha(0.35));
+        }
+        if let Some(d) = &item.detail {
+            r = r.child(text(d.clone()).font(k.ty.small).color(look.muted));
+        }
+        if let Some(sc) = item.shortcut {
+            r = r.child(text(sc).font(k.ty.small).color(look.muted));
+        }
+        list = list.child(r);
+    }
+    if items.is_empty() {
+        list = list.child(
+            text("No matches")
+                .font(k.ty.ui)
+                .color(look.muted)
+                .padding(12.0),
+        );
+    }
+    let card = col()
+        .key("palette-card")
+        .w_full()
+        .max_w(620.0)
+        .max_h(520.0)
+        .radius(k.radius.lg)
+        .fill(look.raised)
+        .border(1.0, look.border)
+        .shadow(12.0, 40.0, rune::Color::BLACK.alpha(0.35))
+        .child(row().w_full().px(14.0).py(12.0).child(field))
+        .child(col().w_full().h(1.0).fill(look.border))
+        .child(
+            col()
+                .w_full()
+                .shrink()
+                .min_h(0.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(col().w_full().padding(6.0).child(list)),
+        );
+    col()
+        .key("palette-overlay")
+        .absolute(0.0, 0.0)
+        .w_full()
+        .h_full()
+        .fill(rune::Color::BLACK.alpha(0.25))
+        .child(rune_kit::scrim("palette-scrim", |s: &mut App| {
+            s.close_palette()
+        }))
+        .child(
+            row()
+                .w_full()
+                .justify_center()
+                .pt(90.0)
+                .px(16.0)
+                .child(card),
+        )
 }
 
 /// The diff inspector: a turn picker, unified/split, and rune-kit's diff view of the patch.
