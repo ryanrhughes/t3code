@@ -42,10 +42,19 @@ pub enum ClientEvent {
 
 pub type Sink = Arc<dyn Fn(ClientEvent) + Send + Sync>;
 
+/// Runs on the session thread with a unary RPC's result; error text is user-facing.
+pub type Reply = Box<dyn FnOnce(Result<Value, String>) + Send>;
+/// Runs on the session thread with each streamed item, then once with `None` (ended) or the
+/// reason it failed. A stream that ends because the connection dropped also reports here.
+pub type OnItem = Box<dyn FnMut(Option<Result<Value, String>>) + Send>;
+
 enum SessionCmd {
     WatchThread(Option<String>),
     Dispatch(Value),
     Launch(Value),
+    Call(String, Value, Reply),
+    Subscribe(u64, String, Value, OnItem),
+    Unsubscribe(u64),
     Shutdown,
 }
 
@@ -68,6 +77,42 @@ impl SessionHandle {
     /// `orchestration.launchThread`; success arrives as `ClientEvent::ThreadLaunched`.
     pub fn launch(&self, input: Value) {
         let _ = self.tx.send(SessionCmd::Launch(input));
+    }
+
+    /// Any unary RPC. `reply` runs on the session thread; post to the UI from it.
+    pub fn call(
+        &self,
+        tag: &str,
+        payload: Value,
+        reply: impl FnOnce(Result<Value, String>) + Send + 'static,
+    ) {
+        if let Err(mpsc::error::SendError(SessionCmd::Call(_, _, reply))) = self
+            .tx
+            .send(SessionCmd::Call(tag.into(), payload, Box::new(reply)))
+        {
+            reply(Err("Not connected to the server".into()));
+        }
+    }
+
+    /// Any streaming RPC, kept open until `unsubscribe(key)`. `key` is the caller's, unique
+    /// among its open subscriptions; reusing one replaces the earlier subscription.
+    pub fn subscribe(
+        &self,
+        key: u64,
+        tag: &str,
+        payload: Value,
+        on_item: impl FnMut(Option<Result<Value, String>>) + Send + 'static,
+    ) {
+        let _ = self.tx.send(SessionCmd::Subscribe(
+            key,
+            tag.into(),
+            payload,
+            Box::new(on_item),
+        ));
+    }
+
+    pub fn unsubscribe(&self, key: u64) {
+        let _ = self.tx.send(SessionCmd::Unsubscribe(key));
     }
 }
 
@@ -118,12 +163,16 @@ pub fn pair_local_blocking(home: &std::path::Path) -> anyhow::Result<Credential>
     })
 }
 
+/// Subscriptions the UI holds open, by its key; reopened on every connect.
+type Subs = std::collections::HashMap<u64, (String, Value, Arc<std::sync::Mutex<OnItem>>)>;
+
 async fn run(cred: Credential, sink: Sink, mut cmds: mpsc::UnboundedReceiver<SessionCmd>) {
     let mut watched: Option<String> = None;
+    let mut subs = Subs::new();
     let mut backoff = Duration::from_millis(500);
     loop {
         sink(ClientEvent::Status(Status::Connecting));
-        let reason = match connected(&cred, &sink, &mut cmds, &mut watched).await {
+        let reason = match connected(&cred, &sink, &mut cmds, &mut watched, &mut subs).await {
             Ok(Exit::Shutdown) => return,
             Ok(Exit::Lost(reason)) => {
                 backoff = Duration::from_millis(500);
@@ -149,6 +198,13 @@ async fn run(cred: Credential, sink: Sink, mut cmds: mpsc::UnboundedReceiver<Ses
                     None | Some(SessionCmd::Shutdown) => return,
                     Some(SessionCmd::WatchThread(id)) => watched = id,
                     Some(SessionCmd::Dispatch(_) | SessionCmd::Launch(_)) => sink(ClientEvent::CommandFailed("Not connected to the server".into())),
+                    Some(SessionCmd::Call(_, _, reply)) => reply(Err("Not connected to the server".into())),
+                    Some(SessionCmd::Subscribe(key, tag, payload, on_item)) => {
+                        subs.insert(key, (tag, payload, Arc::new(std::sync::Mutex::new(on_item))));
+                    }
+                    Some(SessionCmd::Unsubscribe(key)) => {
+                        subs.remove(&key);
+                    }
                 },
             }
         }
@@ -166,6 +222,7 @@ async fn connected(
     sink: &Sink,
     cmds: &mut mpsc::UnboundedReceiver<SessionCmd>,
     watched: &mut Option<String>,
+    subs: &mut Subs,
 ) -> anyhow::Result<Exit> {
     let ticket = pairing::ws_ticket(cred).await?;
     let (rpc, actor) = rpc::connect(cred.ws_url(&ticket)?.as_str()).await?;
@@ -208,6 +265,12 @@ async fn connected(
         json!({ "requestCompletionMarker": true }),
     );
     let mut thread = watched.clone().map(|id| subscribe_thread(&rpc, id));
+    let mut live: std::collections::HashMap<u64, tokio::sync::oneshot::Sender<()>> = subs
+        .iter()
+        .map(|(key, (tag, payload, on_item))| {
+            (*key, open_sub(&rpc, tag, payload.clone(), on_item.clone()))
+        })
+        .collect();
 
     loop {
         tokio::select! {
@@ -258,6 +321,20 @@ async fn connected(
                         }
                     });
                 }
+                Some(SessionCmd::Call(tag, payload, reply)) => {
+                    let rpc = rpc.clone();
+                    tokio::spawn(async move { reply(rpc.call(&tag, payload).await.map_err(|e| e.message())) });
+                }
+                Some(SessionCmd::Subscribe(key, tag, payload, on_item)) => {
+                    let on_item = Arc::new(std::sync::Mutex::new(on_item));
+                    // Dropping the old cancel sender ends a replaced subscription.
+                    live.insert(key, open_sub(&rpc, &tag, payload.clone(), on_item.clone()));
+                    subs.insert(key, (tag, payload, on_item));
+                }
+                Some(SessionCmd::Unsubscribe(key)) => {
+                    subs.remove(&key);
+                    live.remove(&key);
+                }
                 Some(SessionCmd::Launch(input)) => {
                     let (rpc, sink) = (rpc.clone(), sink.clone());
                     let thread_id = input.get("threadId").and_then(Value::as_str).unwrap_or_default().to_owned();
@@ -271,6 +348,42 @@ async fn connected(
             },
         }
     }
+}
+
+/// Forwards one subscription to its callback until the stream ends or the returned sender is
+/// dropped (then the server is told to stop). A dropped connection ends it quietly; the session
+/// reopens it on the next connect.
+fn open_sub(
+    rpc: &Rpc,
+    tag: &str,
+    payload: Value,
+    on_item: Arc<std::sync::Mutex<OnItem>>,
+) -> tokio::sync::oneshot::Sender<()> {
+    let (cancel, mut cancelled) = tokio::sync::oneshot::channel::<()>();
+    let (id, mut rx) = rpc.stream(tag, payload);
+    let rpc = rpc.clone();
+    tokio::spawn(async move {
+        let emit = |item: Option<Result<Value, String>>| {
+            if let Ok(mut f) = on_item.lock() {
+                f(item);
+            }
+        };
+        loop {
+            tokio::select! {
+                _ = &mut cancelled => {
+                    rpc.interrupt(id);
+                    return;
+                }
+                m = rx.recv() => match m {
+                    Some(StreamMsg::Chunk(values)) => values.into_iter().for_each(|v| emit(Some(Ok(v)))),
+                    Some(StreamMsg::End(Ok(()))) => return emit(None),
+                    Some(StreamMsg::End(Err(rpc::RpcError::Disconnected))) | None => return,
+                    Some(StreamMsg::End(Err(e))) => return emit(Some(Err(e.message()))),
+                },
+            }
+        }
+    });
+    cancel
 }
 
 type ThreadSub = (String, u64, mpsc::UnboundedReceiver<StreamMsg>);

@@ -5,3 +5,4 @@ pub mod protocol;
 pub mod rpc;
 pub mod session;
 pub mod store;
+pub mod terminal;

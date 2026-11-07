@@ -87,6 +87,25 @@ pub struct App {
     /// `sidebar_before_narrow` restores the user's choice when the window widens again.
     pub narrow: bool,
     sidebar_before_narrow: Option<bool>,
+    /// Output of expanded command rows, by turn item id. Only expanded rows hold a stream.
+    pub outputs: HashMap<String, CommandOutput>,
+}
+
+/// One expanded command row's output.
+pub struct CommandOutput {
+    pub out: t3_client::terminal::TerminalOutput,
+    /// Still receiving; false once the command settled or the fetch answered.
+    pub running: bool,
+    pub loaded: bool,
+    pub error: Option<String>,
+}
+
+/// The session subscription key for an item's output stream.
+fn output_key(item_id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    ("command-output", item_id).hash(&mut h);
+    h.finish()
 }
 
 const NARROW: f32 = 720.0;
@@ -126,6 +145,7 @@ impl App {
             clock: now_secs(),
             narrow: false,
             sidebar_before_narrow: None,
+            outputs: HashMap::new(),
         };
         match cred {
             Some(c) => app.start(c),
@@ -265,6 +285,7 @@ impl App {
         self.thread = None;
         self.model = None;
         self.popup = None;
+        self.close_outputs();
         if let Some(t) = id.as_deref().and_then(|id| self.shell.thread(id)) {
             self.draft_project = Some(t.project_id.clone());
         }
@@ -421,6 +442,87 @@ impl App {
         tx.color_motion(rune::Spring::new(0.4, 0.0));
         self.rebuild_looks();
         self.popup = None;
+    }
+
+    /// Opens or closes a command row's output: a live stream where the server streams command
+    /// output (`commandOutputStreaming`), else the settled output once.
+    pub fn toggle_output(&mut self, item_id: &str) {
+        if self.outputs.remove(item_id).is_some() {
+            if let Some(session) = &self.session {
+                session.unsubscribe(output_key(item_id));
+            }
+            return;
+        }
+        let (Some(session), Some(thread), Some(handle)) =
+            (&self.session, &self.thread, HANDLE.get().cloned())
+        else {
+            return;
+        };
+        let empty = CommandOutput {
+            out: Default::default(),
+            running: true,
+            loaded: false,
+            error: None,
+        };
+        self.outputs.insert(item_id.to_owned(), empty);
+        let payload = serde_json::json!({ "threadId": thread.thread.id, "itemId": item_id });
+        let id = item_id.to_owned();
+        let streaming = self
+            .config
+            .as_ref()
+            .is_some_and(|c| c.environment.capability("commandOutputStreaming"));
+        if streaming {
+            session.subscribe(
+                output_key(item_id),
+                "orchestration.subscribeCommandOutput",
+                payload,
+                move |frame| {
+                    let id = id.clone();
+                    handle.update(move |s: &mut App, _| s.on_output_frame(&id, frame));
+                },
+            );
+        } else {
+            session.call("orchestration.getTurnItem", payload, move |result| {
+                handle.update(move |s: &mut App, _| {
+                    let Some(o) = s.outputs.get_mut(&id) else {
+                        return;
+                    };
+                    (o.loaded, o.running) = (true, false);
+                    match result {
+                        Ok(v) => o.out.append(v["item"]["output"].as_str().unwrap_or("")),
+                        Err(e) => o.error = Some(e),
+                    }
+                });
+            });
+        }
+    }
+
+    fn on_output_frame(&mut self, item_id: &str, frame: Option<Result<serde_json::Value, String>>) {
+        let Some(o) = self.outputs.get_mut(item_id) else {
+            return;
+        };
+        match frame {
+            Some(Ok(f)) => {
+                o.loaded = true;
+                o.out.apply_frame(
+                    f["kind"] == "replace",
+                    f["text"].as_str().unwrap_or(""),
+                    f["truncated"] == true,
+                );
+                o.running = f["running"] == true;
+            }
+            Some(Err(e)) => (o.error, o.running) = (Some(e), false),
+            None => o.running = false,
+        }
+    }
+
+    fn close_outputs(&mut self) {
+        if let Some(session) = &self.session {
+            for id in self.outputs.keys() {
+                session.unsubscribe(output_key(id));
+            }
+        }
+        self.outputs.clear();
     }
 
     /// Folds the sidebar away when the window turns narrow and restores it when it widens.
@@ -653,7 +755,37 @@ fn scene_theme(s: &mut App, theme: &str, mode: &str) {
     s.rebuild_looks();
 }
 
+/// The fixture thread with its last command expanded, showing styled output.
+fn scene_command_output(s: &mut App) {
+    scene_theme(s, "omarchy", "dark");
+    let Some(id) = s
+        .thread
+        .as_ref()
+        .and_then(|t| {
+            t.visible
+                .iter()
+                .rev()
+                .find(|r| r.item.kind == "command_execution")
+        })
+        .map(|r| r.item.id.clone())
+    else {
+        return;
+    };
+    let mut out = t3_client::terminal::TerminalOutput::default();
+    out.append("\u{1b}[1m\u{1b}[32m   Compiling\u{1b}[0m t3-client v0.1.0\n\u{1b}[1m\u{1b}[33mwarning\u{1b}[0m\u{1b}[1m: unused variable: `x`\u{1b}[0m\n  \u{1b}[34m-->\u{1b}[0m src/rpc.rs:42:9\n\u{1b}[1m\u{1b}[32m    Finished\u{1b}[0m `dev` profile in 3.21s\nDownloading 10%\rDownloading 100%\n\u{1b}[7m PASS \u{1b}[0m 24 tests\n");
+    s.outputs.insert(
+        id,
+        CommandOutput {
+            out,
+            running: false,
+            loaded: true,
+            error: None,
+        },
+    );
+}
+
 pub const SCENES: &[(&str, fn(&mut App))] = &[
+    ("command-output", scene_command_output),
     ("fixture", load_fixture),
     ("omarchy", |s| scene_theme(s, "omarchy", "dark")),
     ("t3-light", |s| scene_theme(s, "light", "light")),

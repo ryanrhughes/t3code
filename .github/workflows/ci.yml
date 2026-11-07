@@ -566,6 +566,7 @@ jobs:
           node apps/rune/scripts/export-contract-schemas.ts
           node apps/rune/scripts/export-builtin-themes.ts
           node apps/rune/scripts/theme-reference.ts
+          node apps/rune/scripts/terminal-reference.ts
           git diff --exit-code -- apps/rune
 
       - name: Check Rust formatting

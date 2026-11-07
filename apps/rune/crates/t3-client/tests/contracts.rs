@@ -67,6 +67,12 @@ fn every_subscription_payload_matches_the_contract() {
         "subscribeThread",
         json!({ "threadId": "t1", "requestCompletionMarker": true }),
     );
+    let item = json!({ "threadId": "t1", "itemId": "i1" });
+    decodes::<c::OrchestrationSubscribeCommandOutputPayload>(
+        "subscribeCommandOutput",
+        item.clone(),
+    );
+    decodes::<c::OrchestrationGetTurnItemPayload>("getTurnItem", item);
 }
 
 /// Real traffic, when a capture is at hand (`cargo run -p t3-client --example capture`). It holds

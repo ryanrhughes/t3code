@@ -31,6 +31,7 @@ cargo test -p t3-client -p t3-theme
 node apps/rune/scripts/export-contract-schemas.ts
 # Regenerate theme assets and parity fixtures from the web code (needs the repo's node_modules):
 node apps/rune/scripts/export-builtin-themes.ts && node apps/rune/scripts/theme-reference.ts
+node apps/rune/scripts/terminal-reference.ts   # command output parity (crates/t3-client/tests/terminal.rs)
 # Headless render from captured wire data, no window and no network:
 cargo run -p t3-client --example capture -- /tmp/fixture.json      # read-only; uses the saved pairing
 T3_WIRE_FIXTURE=/tmp/fixture.json cargo test -p t3-client --test contracts   # real traffic vs. the contract

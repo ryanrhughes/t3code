@@ -33,7 +33,7 @@ pub struct Look {
 }
 
 /// Rune colours are linear; T3 roles are gamma-encoded sRGB.
-fn lin(c: Srgb) -> Color {
+pub fn lin(c: Srgb) -> Color {
     let d = |v: f32| {
         if v <= 0.04045 {
             v / 12.92

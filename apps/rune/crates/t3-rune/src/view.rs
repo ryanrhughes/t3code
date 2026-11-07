@@ -568,6 +568,9 @@ fn timeline(s: &App, look: &Look) -> El {
                             s.expanded.contains(&item.id),
                             s.theme_generation,
                             look.dark,
+                            s.outputs.get(&item.id).map(|o| {
+                                (o.out.text.len(), o.running, o.loaded, o.error.is_some())
+                            }),
                         );
                         rune::memo::memo(r.source_item_id.clone(), version, || {
                             let inner = col()
@@ -734,7 +737,18 @@ fn turn_item(s: &App, look: &Look, item: &TurnItem) -> El {
                 ),
                 _ => line,
             };
-            line
+            let id = item.id.clone();
+            let line = line
+                .cursor(rune::Cursor::Pointer)
+                .on_press(move |s: &mut App| s.toggle_output(&id));
+            match s.outputs.get(&item.id) {
+                None => line,
+                Some(o) => col()
+                    .w_full()
+                    .gap(4.0)
+                    .child(line)
+                    .child(command_output(o, look)),
+            }
         }
         "file_change" => {
             let name = item.file_name.clone().unwrap_or_default();
@@ -859,6 +873,85 @@ fn tool_line(
         r = r.child(rune::icon(&WORKING, 11.0).color(k.c.text_accent));
     }
     r
+}
+
+/// An expanded command's output: styled like the web's panel, scrolled to its end while it runs.
+fn command_output(o: &crate::CommandOutput, look: &Look) -> El {
+    let k = &look.kit;
+    let body = if let Some(e) = &o.error {
+        text(format!("Couldn't load the output: {e}"))
+            .font(k.ty.small)
+            .color(look.error_fg)
+            .wrap()
+    } else if !o.loaded {
+        text("Loading output…").font(k.ty.small).color(look.muted)
+    } else if o.out.text.is_empty() {
+        text(if o.running {
+            "No output yet"
+        } else {
+            "No output"
+        })
+        .font(k.ty.small)
+        .color(look.muted)
+    } else {
+        let palette = if look.dark {
+            &t3_client::terminal::PALETTE_DARK
+        } else {
+            &t3_client::terminal::PALETTE_LIGHT
+        };
+        let mut plain = String::new();
+        let mut spans = Vec::new();
+        for (chunk, style) in t3_client::terminal::spans(&o.out.text, palette, 2_000) {
+            let start = plain.len();
+            plain.push_str(&chunk);
+            let Some(st) = style else { continue };
+            let rgb = |c: [u8; 3]| {
+                crate::theme::lin(t3_theme::Srgb {
+                    r: c[0] as f32 / 255.0,
+                    g: c[1] as f32 / 255.0,
+                    b: c[2] as f32 / 255.0,
+                    a: 1.0,
+                })
+            };
+            let mut span = rune::Span::new(start, plain.len());
+            if let Some(c) = st.color {
+                span.color = Some(if st.dim { rgb(c).alpha(0.65) } else { rgb(c) });
+            } else if st.dim {
+                span.color = Some(look.code_fg.alpha(0.65));
+            }
+            span.bg = st.background.map(rgb);
+            if st.bold {
+                span = span.weight(600.0);
+            }
+            span.italic = st.italic;
+            if st.underline {
+                span.underline = Some(span.color.unwrap_or(look.code_fg));
+            }
+            spans.push(span);
+        }
+        rune::rich(plain, spans)
+            .font(k.ty.mono)
+            .color(look.code_fg)
+            .wrap_anywhere()
+            .selectable(true)
+    };
+    let mut panel = col().w_full().gap(6.0).child(body);
+    if o.out.truncated {
+        panel = panel.child(
+            text("Showing the last 64 KB")
+                .font(k.ty.small)
+                .color(look.muted),
+        );
+    }
+    col()
+        .w_full()
+        .max_h(320.0)
+        .radius(k.radius.md)
+        .fill(look.code_bg)
+        .scroll(ScrollSpec {
+            stick_bottom: o.running,
+        })
+        .child(col().w_full().padding(10.0).child(panel))
 }
 
 /// "Working for 1m 4s", from the run's start; the clock ticks once a second while it works.

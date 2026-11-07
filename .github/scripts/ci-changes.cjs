@@ -35,7 +35,7 @@ const RUST = /^native\/(resource-monitor|kde-snap-shot|hyprland-snap-shot)\//;
 // fixtures are generated from these TypeScript sources, so they rerun its freshness check too.
 const RUNE = /^apps\/rune\//;
 const RUNE_INPUTS =
-  /^(packages\/contracts\/src\/|packages\/shared\/src\/themePalettes\.ts$|apps\/web\/src\/themePalette\.ts$)/;
+  /^(packages\/contracts\/src\/|packages\/shared\/src\/(themePalettes|terminalOutput)\.ts$|apps\/web\/src\/themePalette\.ts$)/;
 
 // These tests read other packages without declaring dependencies.
 const TEST_ONLY_DEPS = {

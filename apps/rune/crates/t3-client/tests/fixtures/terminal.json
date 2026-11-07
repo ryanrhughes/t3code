@@ -1,0 +1,490 @@
+[
+  {
+    "name": "plain",
+    "chunks": ["hello\nworld\n"],
+    "max": 65536,
+    "text": "hello\nworld\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [["hello\nworld\n", null]]
+  },
+  {
+    "name": "crlf",
+    "chunks": ["a\r\nb\r\n"],
+    "max": 65536,
+    "text": "a\nb\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [["a\nb\n", null]]
+  },
+  {
+    "name": "progress",
+    "chunks": ["Downloading 10%\rDownloading 50%", "\rDownloading 100%\n"],
+    "max": 65536,
+    "text": "Downloading 100%\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [["Downloading 100%\n", null]]
+  },
+  {
+    "name": "colors",
+    "chunks": ["\u001b[1;31merror\u001b[0m: bad\n\u001b[32mok\u001b[39m done"],
+    "max": 65536,
+    "text": "\u001b[0;1;31merror\u001b[0m: bad\n\u001b[0;32mok\u001b[0m done",
+    "truncated": false,
+    "pending": "",
+    "spans": [
+      [
+        "error",
+        {
+          "color": "#f47067",
+          "fontWeight": "600"
+        }
+      ],
+      [": bad\n", null],
+      [
+        "ok",
+        {
+          "color": "#57ab5a"
+        }
+      ],
+      [" done", null]
+    ]
+  },
+  {
+    "name": "extended-colors",
+    "chunks": [
+      "\u001b[38;5;208morange\u001b[0m \u001b[38;2;10;20;30mrgb\u001b[m \u001b[48;5;22mbg\u001b[0m"
+    ],
+    "max": 65536,
+    "text": "\u001b[0;38;5;208morange\u001b[0m \u001b[0;38;2;10;20;30mrgb\u001b[0m \u001b[0;48;5;22mbg\u001b[0m",
+    "truncated": false,
+    "pending": "",
+    "spans": [
+      [
+        "orange",
+        {
+          "color": "rgb(255,135,0)"
+        }
+      ],
+      [" ", null],
+      [
+        "rgb",
+        {
+          "color": "rgb(10,20,30)"
+        }
+      ],
+      [" ", null],
+      [
+        "bg",
+        {
+          "color": "#ffffff",
+          "backgroundColor": "rgb(0,95,0)"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "colon-colors",
+    "chunks": ["\u001b[38:2::255:0:0mred\u001b[0m \u001b[4:3mcurly\u001b[4:0m off"],
+    "max": 65536,
+    "text": "\u001b[0;38;2;255;0;0mred\u001b[0m \u001b[0;4mcurly\u001b[0m off",
+    "truncated": false,
+    "pending": "",
+    "spans": [
+      [
+        "red",
+        {
+          "color": "rgb(255,0,0)"
+        }
+      ],
+      [" ", null],
+      [
+        "curly",
+        {
+          "textDecorationLine": "underline"
+        }
+      ],
+      [" off", null]
+    ]
+  },
+  {
+    "name": "erase-line",
+    "chunks": ["line one\u001b[2K\rreplaced\n"],
+    "max": 65536,
+    "text": "replaced\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [["replaced\n", null]]
+  },
+  {
+    "name": "cursor-up-rewrite",
+    "chunks": ["a: 1\nb: 1\n", "\u001b[2A\u001b[2Ka: 2\n\u001b[2Kb: 2\n"],
+    "max": 65536,
+    "text": "a: 2\nb: 2\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [["a: 2\nb: 2\n", null]]
+  },
+  {
+    "name": "split-escape",
+    "chunks": ["\u001b[3", "1mred\u001b", "[0m tail"],
+    "max": 65536,
+    "text": "\u001b[0;31mred\u001b[0m tail",
+    "truncated": false,
+    "pending": "",
+    "spans": [
+      [
+        "red",
+        {
+          "color": "#f47067"
+        }
+      ],
+      [" tail", null]
+    ]
+  },
+  {
+    "name": "osc-title",
+    "chunks": ["\u001b]0;title\u0007visible\n"],
+    "max": 65536,
+    "text": "visible\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [["visible\n", null]]
+  },
+  {
+    "name": "osc-hyperlink",
+    "chunks": ["\u001b]8;;http://x\u001b\\link\u001b]8;;\u001b\\ after"],
+    "max": 65536,
+    "text": "link after",
+    "truncated": false,
+    "pending": "",
+    "spans": [["link after", null]]
+  },
+  {
+    "name": "tabs-backspace",
+    "chunks": ["a\tb\nabc\b\bX\n"],
+    "max": 65536,
+    "text": "a\tb\naXc\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [["a\tb\naXc\n", null]]
+  },
+  {
+    "name": "clear-screen",
+    "chunks": ["old\n", "\u001b[2Jnew"],
+    "max": 65536,
+    "text": "new",
+    "truncated": false,
+    "pending": "",
+    "spans": [["new", null]]
+  },
+  {
+    "name": "clear-scrollback",
+    "chunks": [
+      "line 000 xxxxxxxxxx\nline 001 xxxxxxxxxx\nline 002 xxxxxxxxxx\nline 003 xxxxxxxxxx\nline 004 xxxxxxxxxx\nline 005 xxxxxxxxxx\nline 006 xxxxxxxxxx\nline 007 xxxxxxxxxx\nline 008 xxxxxxxxxx\nline 009 xxxxxxxxxx\nline 010 xxxxxxxxxx\nline 011 xxxxxxxxxx\nline 012 xxxxxxxxxx\nline 013 xxxxxxxxxx\nline 014 xxxxxxxxxx\nline 015 xxxxxxxxxx\nline 016 xxxxxxxxxx\nline 017 xxxxxxxxxx\nline 018 xxxxxxxxxx\nline 019 xxxxxxxxxx\nline 020 xxxxxxxxxx\nline 021 xxxxxxxxxx\nline 022 xxxxxxxxxx\nline 023 xxxxxxxxxx\nline 024 xxxxxxxxxx\nline 025 xxxxxxxxxx\nline 026 xxxxxxxxxx\nline 027 xxxxxxxxxx\nline 028 xxxxxxxxxx\nline 029 xxxxxxxxxx\nline 030 xxxxxxxxxx\nline 031 xxxxxxxxxx\nline 032 xxxxxxxxxx\nline 033 xxxxxxxxxx\nline 034 xxxxxxxxxx\nline 035 xxxxxxxxxx\nline 036 xxxxxxxxxx\nline 037 xxxxxxxxxx\nline 038 xxxxxxxxxx\nline 039 xxxxxxxxxx\nline 040 xxxxxxxxxx\nline 041 xxxxxxxxxx\nline 042 xxxxxxxxxx\nline 043 xxxxxxxxxx\nline 044 xxxxxxxxxx\nline 045 xxxxxxxxxx\nline 046 xxxxxxxxxx\nline 047 xxxxxxxxxx\nline 048 xxxxxxxxxx\nline 049 xxxxxxxxxx\nline 050 xxxxxxxxxx\nline 051 xxxxxxxxxx\nline 052 xxxxxxxxxx\nline 053 xxxxxxxxxx\nline 054 xxxxxxxxxx\nline 055 xxxxxxxxxx\nline 056 xxxxxxxxxx\nline 057 xxxxxxxxxx\nline 058 xxxxxxxxxx\nline 059 xxxxxxxxxx\nline 060 xxxxxxxxxx\nline 061 xxxxxxxxxx\nline 062 xxxxxxxxxx\nline 063 xxxxxxxxxx\nline 064 xxxxxxxxxx\nline 065 xxxxxxxxxx\nline 066 xxxxxxxxxx\nline 067 xxxxxxxxxx\nline 068 xxxxxxxxxx\nline 069 xxxxxxxxxx\n\u001b[3Jafter"
+    ],
+    "max": 65536,
+    "text": "line 007 xxxxxxxxxx\nline 008 xxxxxxxxxx\nline 009 xxxxxxxxxx\nline 010 xxxxxxxxxx\nline 011 xxxxxxxxxx\nline 012 xxxxxxxxxx\nline 013 xxxxxxxxxx\nline 014 xxxxxxxxxx\nline 015 xxxxxxxxxx\nline 016 xxxxxxxxxx\nline 017 xxxxxxxxxx\nline 018 xxxxxxxxxx\nline 019 xxxxxxxxxx\nline 020 xxxxxxxxxx\nline 021 xxxxxxxxxx\nline 022 xxxxxxxxxx\nline 023 xxxxxxxxxx\nline 024 xxxxxxxxxx\nline 025 xxxxxxxxxx\nline 026 xxxxxxxxxx\nline 027 xxxxxxxxxx\nline 028 xxxxxxxxxx\nline 029 xxxxxxxxxx\nline 030 xxxxxxxxxx\nline 031 xxxxxxxxxx\nline 032 xxxxxxxxxx\nline 033 xxxxxxxxxx\nline 034 xxxxxxxxxx\nline 035 xxxxxxxxxx\nline 036 xxxxxxxxxx\nline 037 xxxxxxxxxx\nline 038 xxxxxxxxxx\nline 039 xxxxxxxxxx\nline 040 xxxxxxxxxx\nline 041 xxxxxxxxxx\nline 042 xxxxxxxxxx\nline 043 xxxxxxxxxx\nline 044 xxxxxxxxxx\nline 045 xxxxxxxxxx\nline 046 xxxxxxxxxx\nline 047 xxxxxxxxxx\nline 048 xxxxxxxxxx\nline 049 xxxxxxxxxx\nline 050 xxxxxxxxxx\nline 051 xxxxxxxxxx\nline 052 xxxxxxxxxx\nline 053 xxxxxxxxxx\nline 054 xxxxxxxxxx\nline 055 xxxxxxxxxx\nline 056 xxxxxxxxxx\nline 057 xxxxxxxxxx\nline 058 xxxxxxxxxx\nline 059 xxxxxxxxxx\nline 060 xxxxxxxxxx\nline 061 xxxxxxxxxx\nline 062 xxxxxxxxxx\nline 063 xxxxxxxxxx\nline 064 xxxxxxxxxx\nline 065 xxxxxxxxxx\nline 066 xxxxxxxxxx\nline 067 xxxxxxxxxx\nline 068 xxxxxxxxxx\nline 069 xxxxxxxxxx\nafter",
+    "truncated": true,
+    "pending": "",
+    "spans": [
+      [
+        "line 007 xxxxxxxxxx\nline 008 xxxxxxxxxx\nline 009 xxxxxxxxxx\nline 010 xxxxxxxxxx\nline 011 xxxxxxxxxx\nline 012 xxxxxxxxxx\nline 013 xxxxxxxxxx\nline 014 xxxxxxxxxx\nline 015 xxxxxxxxxx\nline 016 xxxxxxxxxx\nline 017 xxxxxxxxxx\nline 018 xxxxxxxxxx\nline 019 xxxxxxxxxx\nline 020 xxxxxxxxxx\nline 021 xxxxxxxxxx\nline 022 xxxxxxxxxx\nline 023 xxxxxxxxxx\nline 024 xxxxxxxxxx\nline 025 xxxxxxxxxx\nline 026 xxxxxxxxxx\nline 027 xxxxxxxxxx\nline 028 xxxxxxxxxx\nline 029 xxxxxxxxxx\nline 030 xxxxxxxxxx\nline 031 xxxxxxxxxx\nline 032 xxxxxxxxxx\nline 033 xxxxxxxxxx\nline 034 xxxxxxxxxx\nline 035 xxxxxxxxxx\nline 036 xxxxxxxxxx\nline 037 xxxxxxxxxx\nline 038 xxxxxxxxxx\nline 039 xxxxxxxxxx\nline 040 xxxxxxxxxx\nline 041 xxxxxxxxxx\nline 042 xxxxxxxxxx\nline 043 xxxxxxxxxx\nline 044 xxxxxxxxxx\nline 045 xxxxxxxxxx\nline 046 xxxxxxxxxx\nline 047 xxxxxxxxxx\nline 048 xxxxxxxxxx\nline 049 xxxxxxxxxx\nline 050 xxxxxxxxxx\nline 051 xxxxxxxxxx\nline 052 xxxxxxxxxx\nline 053 xxxxxxxxxx\nline 054 xxxxxxxxxx\nline 055 xxxxxxxxxx\nline 056 xxxxxxxxxx\nline 057 xxxxxxxxxx\nline 058 xxxxxxxxxx\nline 059 xxxxxxxxxx\nline 060 xxxxxxxxxx\nline 061 xxxxxxxxxx\nline 062 xxxxxxxxxx\nline 063 xxxxxxxxxx\nline 064 xxxxxxxxxx\nline 065 xxxxxxxxxx\nline 066 xxxxxxxxxx\nline 067 xxxxxxxxxx\nline 068 xxxxxxxxxx\nline 069 xxxxxxxxxx\nafter",
+        null
+      ]
+    ]
+  },
+  {
+    "name": "save-restore",
+    "chunks": ["12345\u001b[s\u001b[3Dxx\u001b[uY \u001b7ab\u001b8Z"],
+    "max": 65536,
+    "text": "12xx5Y Zb",
+    "truncated": false,
+    "pending": "",
+    "spans": [["12xx5Y Zb", null]]
+  },
+  {
+    "name": "scroll-past-window",
+    "chunks": [
+      "line 000 xxxxxxxxxx\nline 001 xxxxxxxxxx\nline 002 xxxxxxxxxx\nline 003 xxxxxxxxxx\nline 004 xxxxxxxxxx\nline 005 xxxxxxxxxx\nline 006 xxxxxxxxxx\nline 007 xxxxxxxxxx\nline 008 xxxxxxxxxx\nline 009 xxxxxxxxxx\nline 010 xxxxxxxxxx\nline 011 xxxxxxxxxx\nline 012 xxxxxxxxxx\nline 013 xxxxxxxxxx\nline 014 xxxxxxxxxx\nline 015 xxxxxxxxxx\nline 016 xxxxxxxxxx\nline 017 xxxxxxxxxx\nline 018 xxxxxxxxxx\nline 019 xxxxxxxxxx\nline 020 xxxxxxxxxx\nline 021 xxxxxxxxxx\nline 022 xxxxxxxxxx\nline 023 xxxxxxxxxx\nline 024 xxxxxxxxxx\nline 025 xxxxxxxxxx\nline 026 xxxxxxxxxx\nline 027 xxxxxxxxxx\nline 028 xxxxxxxxxx\nline 029 xxxxxxxxxx\nline 030 xxxxxxxxxx\nline 031 xxxxxxxxxx\nline 032 xxxxxxxxxx\nline 033 xxxxxxxxxx\nline 034 xxxxxxxxxx\nline 035 xxxxxxxxxx\nline 036 xxxxxxxxxx\nline 037 xxxxxxxxxx\nline 038 xxxxxxxxxx\nline 039 xxxxxxxxxx\nline 040 xxxxxxxxxx\nline 041 xxxxxxxxxx\nline 042 xxxxxxxxxx\nline 043 xxxxxxxxxx\nline 044 xxxxxxxxxx\nline 045 xxxxxxxxxx\nline 046 xxxxxxxxxx\nline 047 xxxxxxxxxx\nline 048 xxxxxxxxxx\nline 049 xxxxxxxxxx\nline 050 xxxxxxxxxx\nline 051 xxxxxxxxxx\nline 052 xxxxxxxxxx\nline 053 xxxxxxxxxx\nline 054 xxxxxxxxxx\nline 055 xxxxxxxxxx\nline 056 xxxxxxxxxx\nline 057 xxxxxxxxxx\nline 058 xxxxxxxxxx\nline 059 xxxxxxxxxx\nline 060 xxxxxxxxxx\nline 061 xxxxxxxxxx\nline 062 xxxxxxxxxx\nline 063 xxxxxxxxxx\nline 064 xxxxxxxxxx\nline 065 xxxxxxxxxx\nline 066 xxxxxxxxxx\nline 067 xxxxxxxxxx\nline 068 xxxxxxxxxx\nline 069 xxxxxxxxxx\nline 070 xxxxxxxxxx\nline 071 xxxxxxxxxx\nline 072 xxxxxxxxxx\nline 073 xxxxxxxxxx\nline 074 xxxxxxxxxx\nline 075 xxxxxxxxxx\nline 076 xxxxxxxxxx\nline 077 xxxxxxxxxx\nline 078 xxxxxxxxxx\nline 079 xxxxxxxxxx\n",
+      "\u001b[5Aup"
+    ],
+    "max": 65536,
+    "text": "line 000 xxxxxxxxxx\nline 001 xxxxxxxxxx\nline 002 xxxxxxxxxx\nline 003 xxxxxxxxxx\nline 004 xxxxxxxxxx\nline 005 xxxxxxxxxx\nline 006 xxxxxxxxxx\nline 007 xxxxxxxxxx\nline 008 xxxxxxxxxx\nline 009 xxxxxxxxxx\nline 010 xxxxxxxxxx\nline 011 xxxxxxxxxx\nline 012 xxxxxxxxxx\nline 013 xxxxxxxxxx\nline 014 xxxxxxxxxx\nline 015 xxxxxxxxxx\nline 016 xxxxxxxxxx\nline 017 xxxxxxxxxx\nline 018 xxxxxxxxxx\nline 019 xxxxxxxxxx\nline 020 xxxxxxxxxx\nline 021 xxxxxxxxxx\nline 022 xxxxxxxxxx\nline 023 xxxxxxxxxx\nline 024 xxxxxxxxxx\nline 025 xxxxxxxxxx\nline 026 xxxxxxxxxx\nline 027 xxxxxxxxxx\nline 028 xxxxxxxxxx\nline 029 xxxxxxxxxx\nline 030 xxxxxxxxxx\nline 031 xxxxxxxxxx\nline 032 xxxxxxxxxx\nline 033 xxxxxxxxxx\nline 034 xxxxxxxxxx\nline 035 xxxxxxxxxx\nline 036 xxxxxxxxxx\nline 037 xxxxxxxxxx\nline 038 xxxxxxxxxx\nline 039 xxxxxxxxxx\nline 040 xxxxxxxxxx\nline 041 xxxxxxxxxx\nline 042 xxxxxxxxxx\nline 043 xxxxxxxxxx\nline 044 xxxxxxxxxx\nline 045 xxxxxxxxxx\nline 046 xxxxxxxxxx\nline 047 xxxxxxxxxx\nline 048 xxxxxxxxxx\nline 049 xxxxxxxxxx\nline 050 xxxxxxxxxx\nline 051 xxxxxxxxxx\nline 052 xxxxxxxxxx\nline 053 xxxxxxxxxx\nline 054 xxxxxxxxxx\nline 055 xxxxxxxxxx\nline 056 xxxxxxxxxx\nline 057 xxxxxxxxxx\nline 058 xxxxxxxxxx\nline 059 xxxxxxxxxx\nline 060 xxxxxxxxxx\nline 061 xxxxxxxxxx\nline 062 xxxxxxxxxx\nline 063 xxxxxxxxxx\nline 064 xxxxxxxxxx\nline 065 xxxxxxxxxx\nline 066 xxxxxxxxxx\nline 067 xxxxxxxxxx\nline 068 xxxxxxxxxx\nline 069 xxxxxxxxxx\nline 070 xxxxxxxxxx\nline 071 xxxxxxxxxx\nline 072 xxxxxxxxxx\nline 073 xxxxxxxxxx\nline 074 xxxxxxxxxx\nupne 075 xxxxxxxxxx\nline 076 xxxxxxxxxx\nline 077 xxxxxxxxxx\nline 078 xxxxxxxxxx\nline 079 xxxxxxxxxx\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [
+      [
+        "line 000 xxxxxxxxxx\nline 001 xxxxxxxxxx\nline 002 xxxxxxxxxx\nline 003 xxxxxxxxxx\nline 004 xxxxxxxxxx\nline 005 xxxxxxxxxx\nline 006 xxxxxxxxxx\nline 007 xxxxxxxxxx\nline 008 xxxxxxxxxx\nline 009 xxxxxxxxxx\nline 010 xxxxxxxxxx\nline 011 xxxxxxxxxx\nline 012 xxxxxxxxxx\nline 013 xxxxxxxxxx\nline 014 xxxxxxxxxx\nline 015 xxxxxxxxxx\nline 016 xxxxxxxxxx\nline 017 xxxxxxxxxx\nline 018 xxxxxxxxxx\nline 019 xxxxxxxxxx\nline 020 xxxxxxxxxx\nline 021 xxxxxxxxxx\nline 022 xxxxxxxxxx\nline 023 xxxxxxxxxx\nline 024 xxxxxxxxxx\nline 025 xxxxxxxxxx\nline 026 xxxxxxxxxx\nline 027 xxxxxxxxxx\nline 028 xxxxxxxxxx\nline 029 xxxxxxxxxx\nline 030 xxxxxxxxxx\nline 031 xxxxxxxxxx\nline 032 xxxxxxxxxx\nline 033 xxxxxxxxxx\nline 034 xxxxxxxxxx\nline 035 xxxxxxxxxx\nline 036 xxxxxxxxxx\nline 037 xxxxxxxxxx\nline 038 xxxxxxxxxx\nline 039 xxxxxxxxxx\nline 040 xxxxxxxxxx\nline 041 xxxxxxxxxx\nline 042 xxxxxxxxxx\nline 043 xxxxxxxxxx\nline 044 xxxxxxxxxx\nline 045 xxxxxxxxxx\nline 046 xxxxxxxxxx\nline 047 xxxxxxxxxx\nline 048 xxxxxxxxxx\nline 049 xxxxxxxxxx\nline 050 xxxxxxxxxx\nline 051 xxxxxxxxxx\nline 052 xxxxxxxxxx\nline 053 xxxxxxxxxx\nline 054 xxxxxxxxxx\nline 055 xxxxxxxxxx\nline 056 xxxxxxxxxx\nline 057 xxxxxxxxxx\nline 058 xxxxxxxxxx\nline 059 xxxxxxxxxx\nline 060 xxxxxxxxxx\nline 061 xxxxxxxxxx\nline 062 xxxxxxxxxx\nline 063 xxxxxxxxxx\nline 064 xxxxxxxxxx\nline 065 xxxxxxxxxx\nline 066 xxxxxxxxxx\nline 067 xxxxxxxxxx\nline 068 xxxxxxxxxx\nline 069 xxxxxxxxxx\nline 070 xxxxxxxxxx\nline 071 xxxxxxxxxx\nline 072 xxxxxxxxxx\nline 073 xxxxxxxxxx\nline 074 xxxxxxxxxx\nupne 075 xxxxxxxxxx\nline 076 xxxxxxxxxx\nline 077 xxxxxxxxxx\nline 078 xxxxxxxxxx\nline 079 xxxxxxxxxx\n",
+        null
+      ]
+    ]
+  },
+  {
+    "name": "position",
+    "chunks": ["abc\ndef\u001b[1;2HZ\u001b[5G!"],
+    "max": 65536,
+    "text": "aZc !\ndef",
+    "truncated": false,
+    "pending": "",
+    "spans": [["aZc !\ndef", null]]
+  },
+  {
+    "name": "inverse-badges",
+    "chunks": ["\u001b[7minv\u001b[0m \u001b[42mPASS\u001b[0m \u001b[30;47mdark on light\u001b[0m"],
+    "max": 65536,
+    "text": "\u001b[0;7minv\u001b[0m \u001b[0;42mPASS\u001b[0m \u001b[0;30;47mdark on light\u001b[0m",
+    "truncated": false,
+    "pending": "",
+    "spans": [
+      [
+        "inv",
+        {
+          "color": "#1f2328",
+          "backgroundColor": "#adbac7"
+        }
+      ],
+      [" ", null],
+      [
+        "PASS",
+        {
+          "color": "#ffffff",
+          "backgroundColor": "#57ab5a"
+        }
+      ],
+      [" ", null],
+      [
+        "dark on light",
+        {
+          "color": "#3b4048",
+          "backgroundColor": "#adbac7"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "bright",
+    "chunks": [
+      "\u001b[91mbright\u001b[0m \u001b[103mbg\u001b[0m \u001b[2;3;9mdim\u001b[22;23;29m back"
+    ],
+    "max": 65536,
+    "text": "\u001b[0;91mbright\u001b[0m \u001b[0;103mbg\u001b[0m \u001b[0;2;3;9mdim\u001b[0m back",
+    "truncated": false,
+    "pending": "",
+    "spans": [
+      [
+        "bright",
+        {
+          "color": "#ff938a"
+        }
+      ],
+      [" ", null],
+      [
+        "bg",
+        {
+          "color": "#1f2328",
+          "backgroundColor": "#daaa3f"
+        }
+      ],
+      [" ", null],
+      [
+        "dim",
+        {
+          "opacity": 0.65,
+          "fontStyle": "italic",
+          "textDecorationLine": "line-through"
+        }
+      ],
+      [" back", null]
+    ]
+  },
+  {
+    "name": "long-unfinished-escape",
+    "chunks": [
+      "ok \u001b[1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;"
+    ],
+    "max": 65536,
+    "text": "ok ",
+    "truncated": false,
+    "pending": "",
+    "spans": [["ok ", null]]
+  },
+  {
+    "name": "unicode",
+    "chunks": ["héllo → wörld\n"],
+    "max": 65536,
+    "text": "héllo → wörld\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [["héllo → wörld\n", null]]
+  },
+  {
+    "name": "c1-and-del",
+    "chunks": ["abc\u0000d\n"],
+    "max": 65536,
+    "text": "abcd\n",
+    "truncated": false,
+    "pending": "",
+    "spans": [["abcd\n", null]]
+  },
+  {
+    "name": "intermediates",
+    "chunks": ["\u001b(Bplain \u001b#8x"],
+    "max": 65536,
+    "text": "plain x",
+    "truncated": false,
+    "pending": "",
+    "spans": [["plain x", null]]
+  },
+  {
+    "name": "tail-lines",
+    "chunks": [
+      "line 000 xxxxxxxxxxxxxxxxxxxx\nline 001 xxxxxxxxxxxxxxxxxxxx\nline 002 xxxxxxxxxxxxxxxxxxxx\nline 003 xxxxxxxxxxxxxxxxxxxx\nline 004 xxxxxxxxxxxxxxxxxxxx\nline 005 xxxxxxxxxxxxxxxxxxxx\nline 006 xxxxxxxxxxxxxxxxxxxx\nline 007 xxxxxxxxxxxxxxxxxxxx\nline 008 xxxxxxxxxxxxxxxxxxxx\nline 009 xxxxxxxxxxxxxxxxxxxx\nline 010 xxxxxxxxxxxxxxxxxxxx\nline 011 xxxxxxxxxxxxxxxxxxxx\nline 012 xxxxxxxxxxxxxxxxxxxx\nline 013 xxxxxxxxxxxxxxxxxxxx\nline 014 xxxxxxxxxxxxxxxxxxxx\nline 015 xxxxxxxxxxxxxxxxxxxx\nline 016 xxxxxxxxxxxxxxxxxxxx\nline 017 xxxxxxxxxxxxxxxxxxxx\nline 018 xxxxxxxxxxxxxxxxxxxx\nline 019 xxxxxxxxxxxxxxxxxxxx\nline 020 xxxxxxxxxxxxxxxxxxxx\nline 021 xxxxxxxxxxxxxxxxxxxx\nline 022 xxxxxxxxxxxxxxxxxxxx\nline 023 xxxxxxxxxxxxxxxxxxxx\nline 024 xxxxxxxxxxxxxxxxxxxx\nline 025 xxxxxxxxxxxxxxxxxxxx\nline 026 xxxxxxxxxxxxxxxxxxxx\nline 027 xxxxxxxxxxxxxxxxxxxx\nline 028 xxxxxxxxxxxxxxxxxxxx\nline 029 xxxxxxxxxxxxxxxxxxxx\nline 030 xxxxxxxxxxxxxxxxxxxx\nline 031 xxxxxxxxxxxxxxxxxxxx\nline 032 xxxxxxxxxxxxxxxxxxxx\nline 033 xxxxxxxxxxxxxxxxxxxx\nline 034 xxxxxxxxxxxxxxxxxxxx\nline 035 xxxxxxxxxxxxxxxxxxxx\nline 036 xxxxxxxxxxxxxxxxxxxx\nline 037 xxxxxxxxxxxxxxxxxxxx\nline 038 xxxxxxxxxxxxxxxxxxxx\nline 039 xxxxxxxxxxxxxxxxxxxx\nline 040 xxxxxxxxxxxxxxxxxxxx\nline 041 xxxxxxxxxxxxxxxxxxxx\nline 042 xxxxxxxxxxxxxxxxxxxx\nline 043 xxxxxxxxxxxxxxxxxxxx\nline 044 xxxxxxxxxxxxxxxxxxxx\nline 045 xxxxxxxxxxxxxxxxxxxx\nline 046 xxxxxxxxxxxxxxxxxxxx\nline 047 xxxxxxxxxxxxxxxxxxxx\nline 048 xxxxxxxxxxxxxxxxxxxx\nline 049 xxxxxxxxxxxxxxxxxxxx"
+    ],
+    "max": 200,
+    "text": "line 044 xxxxxxxxxxxxxxxxxxxx\nline 045 xxxxxxxxxxxxxxxxxxxx\nline 046 xxxxxxxxxxxxxxxxxxxx\nline 047 xxxxxxxxxxxxxxxxxxxx\nline 048 xxxxxxxxxxxxxxxxxxxx\nline 049 xxxxxxxxxxxxxxxxxxxx",
+    "truncated": true,
+    "pending": "",
+    "spans": [
+      [
+        "line 044 xxxxxxxxxxxxxxxxxxxx\nline 045 xxxxxxxxxxxxxxxxxxxx\nline 046 xxxxxxxxxxxxxxxxxxxx\nline 047 xxxxxxxxxxxxxxxxxxxx\nline 048 xxxxxxxxxxxxxxxxxxxx\nline 049 xxxxxxxxxxxxxxxxxxxx",
+        null
+      ]
+    ]
+  },
+  {
+    "name": "tail-long-line",
+    "chunks": [
+      "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+    ],
+    "max": 200,
+    "text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "truncated": true,
+    "pending": "",
+    "spans": [
+      [
+        "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+        null
+      ]
+    ]
+  },
+  {
+    "name": "tail-styled-cut",
+    "chunks": [
+      "\u001b[32mgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\u001b[0m"
+    ],
+    "max": 200,
+    "text": "\u001b[0;32mgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\u001b[0m",
+    "truncated": true,
+    "pending": "",
+    "spans": [
+      [
+        "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+        {
+          "color": "#57ab5a"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "tail-incremental",
+    "chunks": [
+      "\u001b[30mrow 0\u001b[0m\n",
+      "\u001b[31mrow 1\u001b[0m\n",
+      "\u001b[32mrow 2\u001b[0m\n",
+      "\u001b[33mrow 3\u001b[0m\n",
+      "\u001b[34mrow 4\u001b[0m\n",
+      "\u001b[35mrow 5\u001b[0m\n",
+      "\u001b[36mrow 6\u001b[0m\n",
+      "\u001b[37mrow 7\u001b[0m\n",
+      "\u001b[30mrow 8\u001b[0m\n",
+      "\u001b[31mrow 9\u001b[0m\n",
+      "\u001b[32mrow 10\u001b[0m\n",
+      "\u001b[33mrow 11\u001b[0m\n",
+      "\u001b[34mrow 12\u001b[0m\n",
+      "\u001b[35mrow 13\u001b[0m\n",
+      "\u001b[36mrow 14\u001b[0m\n",
+      "\u001b[37mrow 15\u001b[0m\n",
+      "\u001b[30mrow 16\u001b[0m\n",
+      "\u001b[31mrow 17\u001b[0m\n",
+      "\u001b[32mrow 18\u001b[0m\n",
+      "\u001b[33mrow 19\u001b[0m\n",
+      "\u001b[34mrow 20\u001b[0m\n",
+      "\u001b[35mrow 21\u001b[0m\n",
+      "\u001b[36mrow 22\u001b[0m\n",
+      "\u001b[37mrow 23\u001b[0m\n",
+      "\u001b[30mrow 24\u001b[0m\n",
+      "\u001b[31mrow 25\u001b[0m\n",
+      "\u001b[32mrow 26\u001b[0m\n",
+      "\u001b[33mrow 27\u001b[0m\n",
+      "\u001b[34mrow 28\u001b[0m\n",
+      "\u001b[35mrow 29\u001b[0m\n"
+    ],
+    "max": 120,
+    "text": "\u001b[0;30mrow 24\u001b[0m\n\u001b[0;31mrow 25\u001b[0m\n\u001b[0;32mrow 26\u001b[0m\n\u001b[0;33mrow 27\u001b[0m\n\u001b[0;34mrow 28\u001b[0m\n\u001b[0;35mrow 29\u001b[0m\n",
+    "truncated": true,
+    "pending": "",
+    "spans": [
+      [
+        "row 24",
+        {
+          "color": "#3b4048"
+        }
+      ],
+      ["\n", null],
+      [
+        "row 25",
+        {
+          "color": "#f47067"
+        }
+      ],
+      ["\n", null],
+      [
+        "row 26",
+        {
+          "color": "#57ab5a"
+        }
+      ],
+      ["\n", null],
+      [
+        "row 27",
+        {
+          "color": "#c69026"
+        }
+      ],
+      ["\n", null],
+      [
+        "row 28",
+        {
+          "color": "#539bf5"
+        }
+      ],
+      ["\n", null],
+      [
+        "row 29",
+        {
+          "color": "#b083f0"
+        }
+      ],
+      ["\n", null]
+    ]
+  },
+  {
+    "name": "below-cursor-trim",
+    "chunks": [
+      "line 000 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 001 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 002 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 003 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 004 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 005 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 006 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 007 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 008 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 009 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+      "\u001b[9Azzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+    ],
+    "max": 150,
+    "text": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\nline 008 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 009 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+    "truncated": true,
+    "pending": "",
+    "spans": [
+      [
+        "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\nline 008 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nline 009 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+        null
+      ]
+    ]
+  }
+]
