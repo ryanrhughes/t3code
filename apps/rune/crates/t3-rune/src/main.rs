@@ -109,6 +109,10 @@ pub struct Env {
     pub status: Status,
     pub config: Option<ServerConfig>,
     pub shell: ShellState,
+    /// Theme files on this machine (Omarchy's); the theme environment's are the ones in use.
+    pub themes: Vec<ThemeDefinition>,
+    /// Which session the events come from; a replaced session's late ones are dropped.
+    generation: u64,
 }
 
 impl Env {
@@ -149,8 +153,8 @@ pub struct App {
     pub inspector: Inspector,
     /// The settings page, in place of the thread.
     pub settings_open: bool,
-    /// The machine whose server settings the page shows.
-    pub settings_env: usize,
+    /// The machine whose server settings the page shows, by environment id.
+    pub settings_env: Option<String>,
     /// Settings → Machines: a pairing link for another machine.
     pub add_link: TextEdit,
     pub adding: bool,
@@ -202,6 +206,9 @@ pub struct App {
     window_width: f32,
     /// The inspector width the user chose, while `fit` holds it narrower.
     inspector_wanted: Option<f32>,
+    /// The width `fit` last gave the inspector, to tell its own changes from the user's.
+    inspector_fitted: Option<f32>,
+    next_generation: u64,
     /// Output of expanded command rows, by turn item id. Only expanded rows hold a stream.
     pub outputs: HashMap<String, CommandOutput>,
 }
@@ -328,7 +335,7 @@ impl App {
             diff_pane: PaneState::new(620.0).range(380.0, 1200.0).collapsed(),
             inspector: Inspector::Changes,
             settings_open: false,
-            settings_env: 0,
+            settings_env: None,
             add_link: TextEdit::new(""),
             adding: false,
             add_error: None,
@@ -351,6 +358,8 @@ impl App {
             sidebar_before_narrow: None,
             window_width: 0.0,
             inspector_wanted: None,
+            inspector_fitted: None,
+            next_generation: 0,
             outputs: HashMap::new(),
             menu: None,
             menu_seq: 0,
@@ -383,13 +392,15 @@ impl App {
     /// Pairing an environment again replaces its session.
     fn start(&mut self, cred: Credential) {
         let env_id = cred.environment_id.clone();
+        self.next_generation += 1;
+        let generation = self.next_generation;
         let session = HANDLE.get().cloned().map(|handle| {
             let id = env_id.clone();
             Rc::new(session::spawn(
                 cred.clone(),
                 std::sync::Arc::new(move |ev| {
                     let id = id.clone();
-                    handle.update(move |s, tx| s.on_event(&id, ev, tx))
+                    handle.update(move |s, tx| s.on_event(&id, generation, ev, tx))
                 }),
             ))
         });
@@ -399,11 +410,42 @@ impl App {
             status: Status::Connecting,
             config: None,
             shell: ShellState::default(),
+            themes: Vec::new(),
+            generation,
         };
         match self.env_index(&env_id) {
-            Some(i) => self.envs[i] = env,
+            Some(i) => {
+                self.envs[i] = env;
+                // Pairing the open thread's machine again: the new session watches it too.
+                if i == self.focus {
+                    if let Some(s) = self.session() {
+                        s.watch_thread(self.selected.clone());
+                    }
+                }
+            }
             None => self.envs.push(env),
         }
+    }
+
+    /// A machine's name, with its address when another paired machine has the same name.
+    pub fn env_name(&self, idx: usize) -> String {
+        let Some(e) = self.envs.get(idx) else {
+            return String::new();
+        };
+        let label = e.label();
+        let shared = self
+            .envs
+            .iter()
+            .enumerate()
+            .any(|(j, o)| j != idx && o.label() == label);
+        if !shared {
+            return label.to_owned();
+        }
+        let host = url::Url::parse(&e.cred.http_base)
+            .ok()
+            .and_then(|u| Some(format!("{}:{}", u.host_str()?, u.port_or_known_default()?)))
+            .unwrap_or_else(|| e.cred.http_base.clone());
+        format!("{label} ({host})")
     }
 
     pub fn env_index(&self, environment_id: &str) -> Option<usize> {
@@ -459,9 +501,12 @@ impl App {
         tx.wake_after(std::time::Duration::from_secs(6));
     }
 
-    fn on_event(&mut self, env_id: &str, ev: ClientEvent, tx: &mut Tx) {
+    fn on_event(&mut self, env_id: &str, generation: u64, ev: ClientEvent, tx: &mut Tx) {
         DIAG_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let Some(idx) = self.env_index(env_id) else {
+        let Some(idx) = self
+            .env_index(env_id)
+            .filter(|&i| self.envs[i].generation == generation)
+        else {
             return;
         };
         let themes = idx == self.theme_env();
@@ -494,16 +539,18 @@ impl App {
                         }
                     }
                 }
-                ServerConfigEvent::EnvironmentThemesUpdated { .. } if !themes => {}
                 ServerConfigEvent::EnvironmentThemesUpdated { payload } => {
                     // Omarchy rewrites themes/omarchy.json on every theme switch; this repaints live.
-                    self.env_themes = payload
+                    self.envs[idx].themes = payload
                         .themes
                         .iter()
                         .filter_map(t3_theme::environment_theme)
                         .collect();
-                    tx.color_motion(rune::Spring::new(0.4, 0.0));
-                    self.rebuild_looks();
+                    if themes {
+                        self.env_themes = self.envs[idx].themes.clone();
+                        tx.color_motion(rune::Spring::new(0.4, 0.0));
+                        self.rebuild_looks();
+                    }
                 }
                 ServerConfigEvent::Unknown => {}
             },
@@ -564,15 +611,15 @@ impl App {
             ClientEvent::ThreadLaunched { thread_id } => self.open_thread_in(idx, thread_id),
             ClientEvent::CommandFailed(msg) => {
                 let msg = if self.envs.len() > 1 {
-                    format!("{}: {msg}", self.envs[idx].label())
+                    format!("{}: {msg}", self.env_name(idx))
                 } else {
                     msg
                 };
                 self.toast(msg, tx)
             }
             ClientEvent::Unauthorized(msg) => {
-                let label = self.envs[idx].label().to_owned();
-                self.remove_env(idx);
+                let label = self.env_name(idx);
+                self.remove_env(idx, tx);
                 if self.envs.is_empty() {
                     self.screen = Screen::pairing(Some(format!("Pair again: {msg}")));
                 } else {
@@ -583,16 +630,24 @@ impl App {
     }
 
     /// Forgets an environment: its credential, its socket and anything open from it.
-    pub fn remove_env(&mut self, idx: usize) {
+    pub fn remove_env(&mut self, idx: usize, tx: &mut Tx) {
         if idx >= self.envs.len() {
             return;
         }
-        pairing::forget_credential(&self.envs[idx].cred.environment_id);
+        if let Err(e) = pairing::forget_credential(&self.envs[idx].cred.environment_id) {
+            self.toast(format!("Couldn't save the change: {e}"), tx);
+        }
+        let theme_owner = self
+            .envs
+            .get(self.theme_env())
+            .map(|e| e.cred.environment_id.clone());
+        if idx == self.focus {
+            self.clear_thread_view();
+            self.selected = None;
+        }
         self.envs.remove(idx);
         if idx == self.focus {
             self.focus = 0;
-            self.thread = None;
-            self.selected = None;
             self.draft_project = self
                 .shell()
                 .sidebar_projects()
@@ -601,6 +656,30 @@ impl App {
         } else if idx < self.focus {
             self.focus -= 1;
         }
+        // The machine whose themes the client follows may have changed.
+        let owner = self.envs.get(self.theme_env());
+        if owner.map(|e| &e.cred.environment_id) != theme_owner.as_ref() {
+            self.env_themes = owner.map(|e| e.themes.clone()).unwrap_or_default();
+            if let Some(generation) = owner.and_then(|e| e.config.as_ref()?.default_theme()) {
+                self.prefs.adopt_default_theme(&generation);
+            }
+            self.rebuild_looks();
+        }
+    }
+
+    /// Drops everything shown for the open thread: its detail, streams, diff and model pick.
+    /// The diff's request counter keeps climbing, so a late answer can't land in the next view.
+    fn clear_thread_view(&mut self) {
+        self.thread = None;
+        self.model = None;
+        self.popup = None;
+        self.visit = None;
+        self.close_outputs();
+        self.diff = DiffPanel {
+            sel: self.diff.sel,
+            seq: self.diff.seq + 1,
+            ..DiffPanel::default()
+        };
     }
 
     /// Opens a thread from any environment, moving the focus there.
@@ -616,26 +695,17 @@ impl App {
         if let Some(s) = self.session() {
             s.watch_thread(None);
         }
-        self.close_outputs();
+        self.clear_thread_view();
         self.focus = env;
         self.selected = None;
-        self.thread = None;
         self.draft_project = None;
-        self.model = None;
     }
 
     pub fn open_thread(&mut self, id: Option<String>) {
         if self.selected == id {
             return;
         }
-        self.thread = None;
-        self.model = None;
-        self.popup = None;
-        self.close_outputs();
-        self.diff = DiffPanel {
-            sel: self.diff.sel,
-            ..DiffPanel::default()
-        };
+        self.clear_thread_view();
         if let Some(t) = id.as_deref().and_then(|id| self.shell().thread(id)) {
             self.draft_project = Some(t.project_id.clone());
         }
@@ -1103,7 +1173,7 @@ impl App {
                         group: "Threads",
                         label: t.title.clone(),
                         detail: Some(if many {
-                            format!("{project} · {}", e.label())
+                            format!("{project} · {}", self.env_name(env))
                         } else {
                             project.to_owned()
                         }),
@@ -1379,11 +1449,16 @@ impl App {
             0.0
         };
         let room = (width - sidebar - MAIN_MIN).max(self.diff_pane.min_width());
+        // A width other than the one last fitted is the user's own drag: it becomes the wish.
+        if self.inspector_fitted != Some(self.diff_pane.width()) {
+            self.inspector_wanted = None;
+        }
         let wanted = *self.inspector_wanted.get_or_insert(self.diff_pane.width());
         let fitted = wanted.min(room);
         if fitted != self.diff_pane.width() {
             self.diff_pane.set_width(fitted);
         }
+        self.inspector_fitted = Some(self.diff_pane.width());
         if fitted == wanted {
             self.inspector_wanted = None;
         }
@@ -1452,8 +1527,8 @@ impl App {
     }
 
     /// Unpairs one environment; with none left, back to pairing.
-    pub fn forget(&mut self, idx: usize) {
-        self.remove_env(idx);
+    pub fn forget(&mut self, idx: usize, tx: &mut Tx) {
+        self.remove_env(idx, tx);
         if self.envs.is_empty() {
             self.screen = Screen::pairing(None);
         }
@@ -1636,6 +1711,8 @@ fn load_fixture(s: &mut App) {
         status: Status::Connected,
         config: None,
         shell: ShellState::default(),
+        themes: Vec::new(),
+        generation: 0,
     }];
     s.focus = 0;
     let mut themes = Vec::new();

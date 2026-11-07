@@ -42,9 +42,11 @@ impl App {
 
     /// The machine whose server settings the page shows.
     fn settings_env(&self) -> Option<&Env> {
-        self.envs
-            .get(self.settings_env)
-            .or_else(|| self.envs.first())
+        let picked = self
+            .settings_env
+            .as_deref()
+            .and_then(|id| self.env_index(id));
+        self.envs.get(picked.unwrap_or(0))
     }
 
     /// Patches the server's settings; the reply (or a `settingsUpdated` event) brings the new
@@ -237,9 +239,18 @@ pub fn page(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
             ),
         ));
 
+    // The machine picker shows even when the picked machine is offline, so another can be chosen.
+    let picker = (s.envs.len() > 1).then(|| {
+        section(look, "Server settings").child(setting_row(
+            look,
+            "Machine",
+            "These settings belong to one machine's server.",
+            machine_select(s, look, layer),
+        ))
+    });
     let body = if s.settings_env().and_then(|e| e.config.as_ref()).is_none() {
         col().w_full().child(
-            text("Connect to a server to change its settings")
+            text("That machine isn't connected, so its settings can't be read")
                 .font(k.ty.ui)
                 .color(look.muted),
         )
@@ -301,15 +312,7 @@ pub fn page(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                 "continueThreadsAfterServerUpdate",
                 flag("continueThreadsAfterServerUpdate", true),
             ));
-        let mut body = col().w_full().gap(20.0);
-        if s.envs.len() > 1 {
-            body = body.child(section(look, "Server settings").child(setting_row(
-                look,
-                "Machine",
-                "These settings belong to one machine's server.",
-                machine_select(s, look, layer),
-            )));
-        }
+        let body = col().w_full().gap(20.0);
         body.child(threads)
             .child(responses)
             .child(updates)
@@ -318,6 +321,7 @@ pub fn page(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
 
     let mut connection = section(look, "Machines");
     for (i, e) in s.envs.iter().enumerate() {
+        let env_id = e.cred.environment_id.clone();
         let state = match &e.status {
             Status::Connected => "Connected".to_owned(),
             Status::Connecting => "Connecting…".to_owned(),
@@ -326,16 +330,19 @@ pub fn page(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         connection = connection.child(
             setting_row(
                 look,
-                e.label(),
+                &s.env_name(i),
                 &format!("{} · {state}", e.cred.http_base.trim_end_matches('/')),
                 Button::new("Unpair")
                     .variant(ButtonVariant::Outline)
                     .control_size(ControlSize::Small)
-                    .on_press(move |s: &mut App| {
+                    .on_press_tx(move |s: &mut App, tx| {
+                        let Some(i) = s.env_index(&env_id) else {
+                            return;
+                        };
                         if s.envs.len() == 1 {
                             s.settings_open = false;
                         }
-                        s.forget(i);
+                        s.forget(i, tx);
                     })
                     .build(k)
                     .key(format!("unpair-{i}")),
@@ -390,6 +397,7 @@ pub fn page(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                 .gap(20.0)
                 .child(header)
                 .child(device)
+                .children(picker)
                 .child(body)
                 .child(connection),
         )
@@ -565,8 +573,12 @@ fn archived_section(s: &App, look: &Look) -> El {
 }
 
 fn machine_select(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
-    let labels: Vec<String> = s.envs.iter().map(|e| e.label().to_owned()).collect();
-    let current = s.settings_env().map(|e| e.label().to_owned());
+    // Names are unique (`env_name` adds the address to a shared one), so a pick maps back.
+    let labels: Vec<String> = (0..s.envs.len()).map(|i| s.env_name(i)).collect();
+    let current = s
+        .settings_env()
+        .and_then(|e| s.env_index(&e.cred.environment_id))
+        .map(|i| s.env_name(i));
     rune_kit::Select::new("settings-machine", &labels)
         .current(current.as_deref())
         .open(s.popup == Some(Popup::SettingsMachine))
@@ -574,8 +586,8 @@ fn machine_select(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .on_close(|s: &mut App| s.popup = None)
         .on_choose(move |s: &mut App, label: &str, _: &mut rune::Tx| {
             s.popup = None;
-            if let Some(i) = s.envs.iter().position(|e| e.label() == label) {
-                s.settings_env = i;
+            if let Some(i) = (0..s.envs.len()).find(|&i| s.env_name(i) == label) {
+                s.settings_env = Some(s.envs[i].cred.environment_id.clone());
             }
         })
         .build(&look.kit, layer)

@@ -443,7 +443,7 @@ fn entries(s: &App) -> Vec<Entry> {
             env,
             id: p.id.clone(),
             title: if many {
-                format!("{} · {}", p.title, s.envs[env].label())
+                format!("{} · {}", p.title, s.env_name(env))
             } else {
                 p.title.clone()
             },
@@ -527,11 +527,12 @@ fn sidebar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .build(k)
         .key("new-thread");
     // One machine: its name and state. Several: how many are up, and which ones aren't.
-    let down: Vec<&str> = s
+    let down: Vec<String> = s
         .envs
         .iter()
-        .filter(|e| !matches!(e.status, Status::Connected))
-        .map(|e| e.label())
+        .enumerate()
+        .filter(|(_, e)| !matches!(e.status, Status::Connected))
+        .map(|(i, _)| s.env_name(i))
         .collect();
     let all_up = down.is_empty();
     let (status_label, status_color) = match (s.envs.len(), &s.status()) {
@@ -2355,7 +2356,7 @@ fn project_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     let many = s.envs.len() > 1;
     for (env, e) in s.envs.iter().enumerate() {
         if many {
-            menu = menu.group_label(e.label().to_owned());
+            menu = menu.group_label(s.env_name(env));
         }
         for p in e.shell.sidebar_projects() {
             let id = p.id.clone();

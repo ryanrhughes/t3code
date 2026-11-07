@@ -19,6 +19,8 @@ pub fn is_placeholder(id: &str) -> bool {
 pub struct FilesPanel {
     /// The workspace on screen: the thread's worktree, else its project's root.
     pub cwd: Option<String>,
+    /// The machine `cwd` is on: two machines can have the same path.
+    env_id: Option<String>,
     pub tree: TreeModel<FileNode<()>>,
     /// Loaded folders ("" is the root) and their children as (path, is folder), sorted.
     dirs: HashMap<String, Vec<(String, bool)>>,
@@ -56,6 +58,7 @@ impl Default for FilesPanel {
     fn default() -> Self {
         FilesPanel {
             cwd: None,
+            env_id: None,
             tree: TreeModel::new().key("files-tree"),
             dirs: HashMap::new(),
             ignored: HashSet::new(),
@@ -224,9 +227,11 @@ impl App {
             return;
         }
         let cwd = self.workspace_cwd();
-        if cwd != self.files.cwd {
+        let env_id = self.env().map(|e| e.cred.environment_id.clone());
+        if cwd != self.files.cwd || env_id != self.files.env_id {
             self.files = FilesPanel {
                 cwd,
+                env_id,
                 seq: self.files.seq + 1,
                 file_seq: self.files.file_seq,
                 ..FilesPanel::default()

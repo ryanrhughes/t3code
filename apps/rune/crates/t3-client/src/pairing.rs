@@ -390,10 +390,14 @@ fn upsert(list: &mut Vec<Credential>, cred: &Credential) {
     }
 }
 
+/// Saves run on pairing threads while unpairs run on the UI thread; each read-modify-write
+/// holds this so neither overwrites the other.
+static CREDENTIALS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn write_credentials(list: &[Credential]) -> Result<()> {
     let path = credentials_path().ok_or_else(|| anyhow!("no config directory"))?;
     std::fs::create_dir_all(path.parent().unwrap())?;
-    let tmp = path.with_extension("json.tmp");
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     std::fs::write(&tmp, serde_json::to_vec_pretty(list)?)?;
     #[cfg(unix)]
     {
@@ -409,16 +413,18 @@ fn write_credentials(list: &[Credential]) -> Result<()> {
 }
 
 pub fn save_credential(cred: &Credential) -> Result<()> {
+    let _held = CREDENTIALS.lock().unwrap_or_else(|e| e.into_inner());
     let mut list = load_credentials();
     upsert(&mut list, cred);
     write_credentials(&list)
 }
 
 /// Forgets one environment; the others stay paired.
-pub fn forget_credential(environment_id: &str) {
+pub fn forget_credential(environment_id: &str) -> Result<()> {
+    let _held = CREDENTIALS.lock().unwrap_or_else(|e| e.into_inner());
     let mut list = load_credentials();
     list.retain(|c| c.environment_id != environment_id);
-    let _ = write_credentials(&list);
+    write_credentials(&list)
 }
 
 #[cfg(test)]
