@@ -1,7 +1,7 @@
 //! Drives a real turn on a dev server's free `Replay (dev)` provider through the same session and
 //! protocol code the UI uses: launch a thread, steer and queue follow-ups while it runs, accept
 //! approvals, answer questions, then print how the timeline landed.
-//! `cargo run -p t3-client --example turn -- [showcase|approval|question|multi-turn|plan-haiku]`.
+//! `cargo run -p t3-client --example turn -- [showcase|approval|question|multi-turn|queue-hold|plan-haiku]`.
 //! `plan-haiku` is the one paid scenario: Claude Haiku in plan mode, since only a real provider
 //! proposes a plan. It stops once the plan is ready, for the client to implement.
 //! Sandbox servers only: it starts turns, in a `rune-turns` project under the server's data
@@ -115,7 +115,12 @@ fn main() -> anyhow::Result<()> {
     }
     let model = ModelSelection {
         instance_id: "devReplay".into(),
-        model: scenario.clone(),
+        // queue-hold replays the showcase, then stops it with a message queued.
+        model: if scenario == "queue-hold" {
+            "showcase".into()
+        } else {
+            scenario.clone()
+        },
         options: None,
     };
     handle.launch(protocol::launch_thread(
@@ -169,6 +174,24 @@ fn main() -> anyhow::Result<()> {
         None,
         queue,
     ));
+    if scenario == "queue-hold" {
+        // Stop holds the queue: the queued message waits for a resume.
+        std::thread::sleep(Duration::from_secs(1));
+        handle.dispatch(protocol::stop(&id, true, None).unwrap());
+        wait("the queue to hold", 30, &|s| {
+            s.thread.as_ref().is_some_and(|t| t.queue_held())
+        })?;
+        let s = seen.lock().unwrap();
+        let t = s.thread.as_ref().unwrap();
+        println!(
+            "held queue on {id}: {:?}",
+            t.queued_runs()
+                .iter()
+                .map(|(r, text)| (&r.id, text))
+                .collect::<Vec<_>>()
+        );
+        return Ok(());
+    }
 
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut answered = std::collections::HashSet::new();

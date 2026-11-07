@@ -489,6 +489,7 @@ pub struct TurnItem {
     pub text: Option<String>,
     pub streaming: Option<bool>,
     pub input_intent: Option<String>,
+    pub message_id: Option<String>,
     /// `ChatAttachment`s on a message: `{type, id, name, mimeType, sizeBytes}`.
     pub attachments: Option<Vec<Value>>,
     // proposed_plan / todo_list
@@ -553,6 +554,14 @@ pub struct Run {
     pub id: String,
     pub status: String,
     pub active_attempt_id: Option<String>,
+    pub ordinal: u64,
+    pub user_message_id: Option<String>,
+    /// Order among queued runs; older servers order by `ordinal`.
+    pub queue_position: Option<u64>,
+    /// The user stopped the thread, so the queue waits for a resume.
+    pub queue_held: Option<bool>,
+    /// Starts a new context, so it can't be steered into a running turn.
+    pub fresh_context: Option<bool>,
 }
 
 impl Run {
@@ -594,6 +603,18 @@ pub struct ThreadProjection {
     pub runtime_requests: Vec<RuntimeRequest>,
     pub turn_items: Vec<TurnItem>,
     pub visible_turn_items: Vec<ProjectedTurnItem>,
+    pub messages: Vec<Message>,
+}
+
+/// A conversation message (`OrchestrationV2ConversationMessage`); queued ones have no turn
+/// item yet, so their text comes from here.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Message {
+    pub id: String,
+    pub role: String,
+    pub text: String,
+    pub context: Option<Value>,
 }
 
 /// A turn's snapshot of the workspace. Those with `app_run_ordinal` are the turns a diff spans:
@@ -640,6 +661,7 @@ pub enum ThreadEvent {
     Checkpoint(Checkpoint),
     RuntimeRequest(RuntimeRequest),
     TurnItem(TurnItem),
+    Message(Message),
     Other,
 }
 
@@ -669,6 +691,7 @@ impl ThreadEvent {
             "turn-item.updated" => {
                 decode(payload).map_or(ThreadEvent::Other, ThreadEvent::TurnItem)
             }
+            "message.updated" => decode(payload).map_or(ThreadEvent::Other, ThreadEvent::Message),
             _ => ThreadEvent::Other,
         }
     }

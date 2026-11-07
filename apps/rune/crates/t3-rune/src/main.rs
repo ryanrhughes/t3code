@@ -6,6 +6,7 @@ mod files;
 mod notify;
 mod plan;
 mod prefs;
+mod queue;
 mod settings;
 mod theme;
 mod view;
@@ -182,6 +183,8 @@ pub struct App {
     pub rename: Option<actions::Rename>,
     /// Plan mode for the next new thread (an open thread keeps its own on the server).
     pub draft_plan: bool,
+    /// The queued message the composer is rewriting, by run id.
+    pub editing_queued: Option<String>,
     /// Files on their way into the next message.
     pub attachments: Vec<attach::Attachment>,
     next_attachment: u64,
@@ -375,6 +378,7 @@ impl App {
             thread_menu: None,
             rename: None,
             draft_plan: false,
+            editing_queued: None,
             attachments: Vec::new(),
             next_attachment: 0,
             archived: None,
@@ -681,6 +685,9 @@ impl App {
     /// Drops everything shown for the open thread: its detail, streams, diff and model pick.
     /// The diff's request counter keeps climbing, so a late answer can't land in the next view.
     fn clear_thread_view(&mut self) {
+        if self.editing_queued.take().is_some() {
+            self.composer = focused("");
+        }
         self.thread = None;
         self.model = None;
         self.popup = None;
@@ -802,6 +809,10 @@ impl App {
             if self.ready_plan().is_some() {
                 self.implement_plan(tx);
             }
+            return;
+        }
+        if let Some(run) = self.editing_queued.clone() {
+            self.save_queued_edit(run, text);
             return;
         }
         let Some(session) = self.session() else {
@@ -1686,6 +1697,21 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if ev.is_command('.') {
         s.stop();
+        return true;
+    }
+    if matches!(ev.key, rune::Key::Escape) && s.editing_queued.is_some() {
+        s.cancel_queued_edit();
+        return true;
+    }
+    // The web's thread.steerQueuedMessage and thread.editQueuedMessage.
+    if matches!(ev.key, rune::Key::Enter)
+        && ev.mods.shift
+        && (ev.mods.cmd || ev.mods.ctrl)
+        && s.send_next_queued()
+    {
+        return true;
+    }
+    if matches!(ev.key, rune::Key::Up) && ev.mods.alt && s.edit_last_queued() {
         return true;
     }
     if matches!(ev.key, rune::Key::Escape) && s.rename.is_some() {

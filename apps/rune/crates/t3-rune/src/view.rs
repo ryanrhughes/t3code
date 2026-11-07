@@ -782,9 +782,21 @@ fn timeline(s: &App, look: &Look) -> El {
         (Some(_), Some(t)) => {
             // Only rows near the viewport are built, and a row whose item hasn't changed keeps
             // its subtree (`memo`), so a streaming update costs the streaming row, not the thread.
+            // Queued messages live in the queue above the composer until they run.
+            let queued: std::collections::HashSet<&str> = t
+                .runs
+                .iter()
+                .filter(|r| r.status == "queued")
+                .map(|r| r.id.as_str())
+                .collect();
             let shown_rows: std::rc::Rc<Vec<usize>> = std::rc::Rc::new(
                 (0..t.visible.len())
-                    .filter(|&i| shown(&t.visible[i].item))
+                    .filter(|&i| {
+                        let item = &t.visible[i].item;
+                        shown(item)
+                            && !(item.kind == "user_message"
+                                && item.run_id.as_deref().is_some_and(|r| queued.contains(r)))
+                    })
                     .collect(),
             );
             let count = shown_rows.len() + usize::from(t.is_working());
@@ -2055,7 +2067,9 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
     let k = &look.kit;
     let working = s.thread.as_ref().is_some_and(|t| t.is_working());
     let ready_plan = s.ready_plan().is_some();
-    let placeholder = if ready_plan && !working {
+    let placeholder = if s.editing_queued.is_some() {
+        "Rewrite the queued message: Return saves it, Esc cancels…"
+    } else if ready_plan && !working {
         "Return implements the plan, or type to refine it…"
     } else if working {
         "Steer the agent…"
@@ -2112,6 +2126,9 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
         .gap(8.0)
         .px(4.0)
         .pt(2.0);
+    if let Some(queue) = crate::queue::panel(s, look) {
+        field = field.child(queue);
+    }
     if let Some(banner) = crate::plan::banner(s, look) {
         field = field.child(banner);
     }

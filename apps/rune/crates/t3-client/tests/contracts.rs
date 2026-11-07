@@ -106,6 +106,21 @@ fn every_command_the_client_sends_matches_the_contract() {
             "thread.visit",
             json!({ "visitedAt": "2026-11-07T18:00:00.000Z", "opened": true }),
         ),
+        (
+            "thread.interaction-mode.set",
+            json!({ "interactionMode": "plan" }),
+        ),
+        ("queued-run.start", json!({ "runId": "r2" })),
+        ("queued-run.cancel", json!({ "runId": "r2" })),
+        (
+            "queued-run.edit",
+            json!({ "runId": "r2", "text": "reworded" }),
+        ),
+        (
+            "queued-message.promote-to-steer",
+            json!({ "queuedRunId": "r2", "targetRunId": "r1" }),
+        ),
+        ("queue.resume", json!({})),
     ] {
         decodes::<Dispatch>(kind, protocol::thread_command(kind, "t1", extra));
     }

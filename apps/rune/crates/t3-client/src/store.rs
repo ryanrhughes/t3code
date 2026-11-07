@@ -157,6 +157,8 @@ pub struct ThreadState {
     pub runtime_requests: Vec<RuntimeRequest>,
     /// Local turn items, by id.
     pub turn_items: Vec<TurnItem>,
+    /// Conversation messages, by id; queued ones have no turn item yet.
+    pub messages: Vec<crate::protocol::Message>,
     /// What the timeline renders, in order. Inherited rows (fork history) keep their snapshot
     /// order ahead of local rows; local rows sort by `(ordinal, id)`.
     pub visible: Vec<ProjectedTurnItem>,
@@ -175,6 +177,7 @@ impl ThreadState {
             runtime_requests: p.runtime_requests,
             turn_items: p.turn_items,
             visible: p.visible_turn_items,
+            messages: p.messages,
             sequence,
             synchronized: false,
             deleted: false,
@@ -196,6 +199,7 @@ impl ThreadState {
                 self.refresh_visibility();
             }
             ThreadEvent::RuntimeRequest(req) => upsert(&mut self.runtime_requests, req, |r| &r.id),
+            ThreadEvent::Message(m) => upsert(&mut self.messages, m, |m| &m.id),
             ThreadEvent::ProviderTurn(turn) => {
                 upsert_rev(&mut self.provider_turns, turn, |t| &t.id)
             }
@@ -304,6 +308,56 @@ impl ThreadState {
 
     pub fn active_run(&self) -> Option<&Run> {
         self.runs.iter().rev().find(|r| r.is_active())
+    }
+
+    /// Queued user messages in the order they'll run (`deriveThreadQueueWorkflowState`):
+    /// queue position, else run order. Each with the text of its message.
+    pub fn queued_runs(&self) -> Vec<(&Run, String)> {
+        let mut runs: Vec<&Run> = self.runs.iter().filter(|r| r.status == "queued").collect();
+        runs.sort_by_key(|r| (r.queue_position.unwrap_or(r.ordinal), r.ordinal));
+        runs.into_iter()
+            .map(|run| {
+                // A guest's queued message shows the guest's words, as the web's does.
+                let message = self
+                    .messages
+                    .iter()
+                    .find(|m| Some(&m.id) == run.user_message_id.as_ref());
+                let from_message = message.map(|m| {
+                    m.context
+                        .as_ref()
+                        .and_then(|c| c["guest"]["text"].as_str())
+                        .map_or_else(|| m.text.clone(), str::to_owned)
+                });
+                let text = from_message
+                    .or_else(|| {
+                        self.turn_items
+                            .iter()
+                            .find(|i| {
+                                i.kind == "user_message"
+                                    && (i.message_id.is_some()
+                                        && i.message_id == run.user_message_id
+                                        || i.run_id.as_deref() == Some(run.id.as_str()))
+                            })
+                            .and_then(|i| i.text.clone())
+                    })
+                    .unwrap_or_else(|| "Queued message".into());
+                (run, text)
+            })
+            .collect()
+    }
+
+    /// Stopping the thread held its queue; it waits for `queue.resume`.
+    pub fn queue_held(&self) -> bool {
+        self.runs
+            .iter()
+            .any(|r| r.status == "queued" && r.queue_held == Some(true))
+    }
+
+    /// Nothing is running, so a queued message can start a turn of its own.
+    pub fn can_send_now(&self) -> bool {
+        self.active_run().is_none()
+            && self.thread.archived_at.is_none()
+            && self.thread.deleted_at.is_none()
     }
 
     pub fn interruptible_run(&self) -> Option<&Run> {
@@ -417,6 +471,7 @@ mod tests {
             id: "r".into(),
             status: status.into(),
             active_attempt_id: Some("a".into()),
+            ..Default::default()
         };
         let turn = |status: &str| ProviderTurn {
             id: "p".into(),
@@ -541,5 +596,58 @@ mod tests {
         let ids = |rows: Vec<&ThreadShell>| rows.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(s.project_threads("p")), ["open", "kept-active"]);
         assert_eq!(ids(s.settled_threads()), ["newer", "older"]);
+    }
+
+    #[test]
+    fn queued_runs_follow_queue_position_and_hold() {
+        let mut s = thread();
+        let run = |id: &str, ordinal: u64, position: Option<u64>, held: bool| Run {
+            id: id.into(),
+            status: "queued".into(),
+            ordinal,
+            queue_position: position,
+            queue_held: Some(held),
+            user_message_id: Some(format!("m-{id}")),
+            ..Default::default()
+        };
+        s.runs = vec![
+            Run {
+                id: "done".into(),
+                status: "completed".into(),
+                ordinal: 1,
+                ..Default::default()
+            },
+            run("b", 3, Some(1), false),
+            run("a", 2, Some(2), false),
+            run("c", 4, None, false),
+        ];
+        s.turn_items.push(TurnItem {
+            kind: "user_message".into(),
+            message_id: Some("m-a".into()),
+            text: Some("first queued".into()),
+            ..Default::default()
+        });
+        // A queued message without a turn item yet reads from the conversation.
+        s.messages.push(crate::protocol::Message {
+            id: "m-c".into(),
+            text: "from the conversation".into(),
+            ..Default::default()
+        });
+        let order: Vec<_> = s
+            .queued_runs()
+            .iter()
+            .map(|(r, t)| (r.id.clone(), t.clone()))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("b".into(), "Queued message".into()),
+                ("a".into(), "first queued".into()),
+                ("c".into(), "from the conversation".into()),
+            ]
+        );
+        assert!(!s.queue_held() && s.can_send_now());
+        s.runs[3].queue_held = Some(true);
+        assert!(s.queue_held());
     }
 }
