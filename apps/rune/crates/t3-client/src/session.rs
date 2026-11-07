@@ -105,6 +105,19 @@ pub fn pair_blocking(link: &str) -> anyhow::Result<Credential> {
     })
 }
 
+/// Connects to the server running on this machine for this user and saves the credential.
+/// Blocking; call it off the UI thread.
+pub fn pair_local_blocking(home: &std::path::Path) -> anyhow::Result<Credential> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let cred = pairing::pair_local(home).await?;
+        pairing::save_credential(&cred)?;
+        Ok(cred)
+    })
+}
+
 async fn run(cred: Credential, sink: Sink, mut cmds: mpsc::UnboundedReceiver<SessionCmd>) {
     let mut watched: Option<String> = None;
     let mut backoff = Duration::from_millis(500);

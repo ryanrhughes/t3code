@@ -8,11 +8,13 @@ It covers the core agent loop: pairing, the project and thread sidebar, a live t
 
 ```sh
 cd apps/rune
-cargo run --release -p t3-rune -- 'http://host:3773/pair#token=…'   # first run pairs
-cargo run --release -p t3-rune                                      # later runs reuse the pairing
+cargo run --release -p t3-rune                                      # connects to this machine's server
+cargo run --release -p t3-rune -- 'http://host:3773/pair#token=…'   # or pairs with any server
 ```
 
-The pairing is saved to `$XDG_CONFIG_HOME/t3-rune/credential.json`. Get a link from Settings → Connections in the desktop app, or from `t3 pair`. Linux builds need `libxkbcommon` and `wayland` dev packages (see Rune's README).
+On a machine running T3 Code, the first launch connects with no link. It finds the server through `~/.t3/userdata/server-runtime.json` (`$T3CODE_HOME` overrides) and mints a token with the desktop app's `t3 pair`. That's the same trust as running the command yourself. The session shows up in Settings → Connections as "T3 Code (Rune)", and revoking it there sends the client back to the pairing screen.
+
+For a remote server, paste a link from Settings → Connections or `t3 pair`. The pairing is saved to `$XDG_CONFIG_HOME/t3-rune/credential.json`. Linux builds need the `libxkbcommon` and `wayland` dev packages (see Rune's README).
 
 ## Layout
 

@@ -275,6 +275,74 @@ pub async fn ws_ticket(cred: &Credential) -> Result<String> {
     Ok(res.json::<TicketResponse>().await?.ticket)
 }
 
+/// The T3 home a server on this machine uses: `$T3CODE_HOME`, else `~/.t3`.
+pub fn local_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("T3CODE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".t3")))
+}
+
+/// The origin of a server running for this user under `home`, from the runtime file every
+/// server writes on start (`userdata/server-runtime.json`). Read-only.
+pub fn local_server(home: &std::path::Path) -> Option<Url> {
+    let raw = std::fs::read(home.join("userdata/server-runtime.json")).ok()?;
+    let runtime: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    // A crashed server leaves its file behind.
+    #[cfg(target_os = "linux")]
+    if let Some(pid) = runtime.get("pid").and_then(|p| p.as_u64()) {
+        if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            return None;
+        }
+    }
+    origin(&Url::parse(runtime.get("origin")?.as_str()?).ok()?).ok()
+}
+
+/// Mints a one-time pairing token with the `t3` CLI the desktop app installs (`$T3_CLI`
+/// overrides). The trust is the same as running `t3 pair` by hand: it writes a pairing grant into
+/// the server's data directory, which only the user who owns it can do.
+pub fn mint_local_token(home: &std::path::Path) -> Result<String> {
+    let cli = std::env::var_os("T3_CLI").unwrap_or_else(|| "t3".into());
+    let out = std::process::Command::new(&cli)
+        .arg("pair")
+        .arg("--base-dir")
+        .arg(home)
+        .args(["--label", "T3 Code (Rune)", "--ttl", "2m"])
+        .output()
+        .with_context(|| {
+            format!(
+                "Couldn't run `{}`; install the T3 Code desktop app or paste a pairing link",
+                cli.to_string_lossy()
+            )
+        })?;
+    if !out.status.success() {
+        bail!(
+            "`t3 pair` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    token_from_pair_output(&String::from_utf8_lossy(&out.stdout))
+        .ok_or_else(|| anyhow!("`t3 pair` printed no token"))
+}
+
+/// `t3 pair` prints `Token: <token>` among its lines (`apps/server/src/cli/pair.ts`).
+fn token_from_pair_output(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("Token: "))
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+}
+
+/// Connects to the server running on this machine without a link: find it, mint a token
+/// locally, then redeem it like any pairing link.
+pub async fn pair_local(home: &std::path::Path) -> Result<Credential> {
+    let http_base = local_server(home)
+        .ok_or_else(|| anyhow!("No T3 Code server is running on this machine"))?;
+    // Blocks briefly on the CLI; callers run this on a connect thread, not the UI thread.
+    let token = mint_local_token(home)?;
+    pair(&PairingLink { http_base, token }).await
+}
+
 /// Where saved pairings live: `$XDG_CONFIG_HOME/t3-rune/credential.json` (owner-only).
 pub fn credential_path() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
@@ -340,6 +408,37 @@ mod tests {
             ("http://10.0.0.2:3773/", "z")
         );
         assert!(parse_pairing_link("http://localhost:5733/").is_err());
+    }
+
+    #[test]
+    fn reads_the_token_from_t3_pair_output() {
+        let out = "Pairing with box (http://127.0.0.1:3773).\n\n█▀▀█\n\nPairing URL: http://127.0.0.1:3773/pair#token=ab12\nApp link: t3code://pair?pairingUrl=x\nToken: ab12\nExpires: 2026-11-07T00:02:00.000Z\n";
+        assert_eq!(token_from_pair_output(out).as_deref(), Some("ab12"));
+        assert_eq!(token_from_pair_output("no token here"), None);
+    }
+
+    #[test]
+    fn finds_a_live_local_server_from_its_runtime_file() {
+        let home = std::env::temp_dir().join(format!("t3-rune-home-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("userdata")).unwrap();
+        let write = |pid: u32| {
+            let runtime = format!(
+                r#"{{"version":1,"pid":{pid},"host":"127.0.0.1","port":3773,"origin":"http://127.0.0.1:3773"}}"#
+            );
+            std::fs::write(home.join("userdata/server-runtime.json"), runtime).unwrap();
+        };
+        write(std::process::id());
+        assert_eq!(
+            local_server(&home).map(|u| u.to_string()).as_deref(),
+            Some("http://127.0.0.1:3773/")
+        );
+        // A crashed server's file names a PID that no longer runs.
+        #[cfg(target_os = "linux")]
+        {
+            write(u32::MAX - 1);
+            assert!(local_server(&home).is_none());
+        }
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]

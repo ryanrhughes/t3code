@@ -11,7 +11,14 @@ use t3_client::{pairing, protocol};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let cred = match args.first().filter(|a| a.contains("://")) {
+    let cred = match args
+        .first()
+        .filter(|a| a.contains("://") || *a == "--local")
+    {
+        // `--local`: connect to the server running under $T3CODE_HOME with no link.
+        Some(a) if a == "--local" => session::pair_local_blocking(
+            &pairing::local_home().ok_or_else(|| anyhow::anyhow!("no home"))?,
+        )?,
         Some(link) => session::pair_blocking(link)?,
         None => pairing::load_credential()
             .ok_or_else(|| anyhow::anyhow!("no saved credential; pass a pairing link"))?,

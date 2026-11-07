@@ -55,7 +55,12 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
     let look = s.looks.get(cx.system_dark());
     let mut layer = Vec::new();
     let body = match &s.screen {
-        Screen::Pair { link, error, busy } => pair_screen(look, link, error.as_deref(), *busy),
+        Screen::Pair {
+            link,
+            error,
+            busy,
+            local,
+        } => pair_screen(look, link, error.as_deref(), *busy, local.as_ref()),
         Screen::Main => main_screen(s, cx, look, &mut layer),
     };
     if !s.toasts.is_empty() {
@@ -77,7 +82,13 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
 // ---------------------------------------------------------------------------------------------
 // Pairing
 
-fn pair_screen(look: &Look, link: &rune::TextEdit, error: Option<&str>, busy: bool) -> El {
+fn pair_screen(
+    look: &Look,
+    link: &rune::TextEdit,
+    error: Option<&str>,
+    busy: bool,
+    local: Option<&url::Url>,
+) -> El {
     let k = &look.kit;
     let field = TextInput::new(link)
         .label("Pairing link")
@@ -117,6 +128,39 @@ fn pair_screen(look: &Look, link: &rune::TextEdit, error: Option<&str>, busy: bo
         )
         .child(field)
         .child(row().justify_end().child(button));
+    // On a machine that runs T3 Code, connecting needs no link: the local `t3` CLI mints one.
+    if let Some(origin) = local {
+        let host = origin
+            .host_str()
+            .zip(origin.port())
+            .map_or_else(|| origin.to_string(), |(h, p)| format!("{h}:{p}"));
+        let connect = Button::new(if busy {
+            "Connecting…".to_owned()
+        } else {
+            format!("Connect to this machine ({host})")
+        })
+        .variant(if busy {
+            ButtonVariant::Loading
+        } else {
+            ButtonVariant::Contrast
+        })
+        .control_size(ControlSize::Large)
+        .on_press(|s: &mut App| s.connect_local())
+        .build(k)
+        .key("pair-local");
+        card = card.child(
+            col()
+                .w_full()
+                .pt(6.0)
+                .gap(8.0)
+                .child(
+                    text("Or use the server running here")
+                        .font(k.ty.small)
+                        .color(look.muted),
+                )
+                .child(connect),
+        );
+    }
     if let Some(e) = error {
         card = card.child(
             text(e.to_owned())

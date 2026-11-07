@@ -20,13 +20,27 @@ use t3_theme::ThemeDefinition;
 static HANDLE: OnceLock<AppHandle<App>> = OnceLock::new();
 
 pub enum Screen {
-    /// No saved pairing: paste a link.
+    /// No saved pairing: connect to this machine's server, or paste a link.
     Pair {
         link: TextEdit,
         error: Option<String>,
         busy: bool,
+        /// A server running on this machine for this user, connectable without a link.
+        local: Option<url::Url>,
     },
     Main,
+}
+
+impl Screen {
+    fn pairing(error: Option<String>) -> Screen {
+        let local = pairing::local_home().and_then(|h| pairing::local_server(&h));
+        Screen::Pair {
+            link: focused(""),
+            error,
+            busy: false,
+            local,
+        }
+    }
 }
 
 /// Which popup is open; one at a time.
@@ -76,11 +90,7 @@ impl App {
             screen: if cred.is_some() {
                 Screen::Main
             } else {
-                Screen::Pair {
-                    link: focused(""),
-                    error: None,
-                    busy: false,
-                }
+                Screen::pairing(None)
             },
             cred: None,
             session: None,
@@ -104,8 +114,14 @@ impl App {
             expanded: HashSet::new(),
             theme_generation: 0,
         };
-        if let Some(c) = cred {
-            app.start(c);
+        match cred {
+            Some(c) => app.start(c),
+            // First launch on a machine that runs T3 Code: connect to it with no link. A revoked or
+            // forgotten pairing lands on the pairing screen instead, so revoking sticks.
+            None if matches!(app.screen, Screen::Pair { local: Some(_), .. }) && !headless() => {
+                app.connect_local()
+            }
+            None => {}
         }
         app
     }
@@ -221,11 +237,7 @@ impl App {
             ClientEvent::Unauthorized(msg) => {
                 pairing::forget_credential();
                 self.session = None;
-                self.screen = Screen::Pair {
-                    link: focused(""),
-                    error: Some(format!("Pair again: {msg}")),
-                    busy: false,
-                };
+                self.screen = Screen::pairing(Some(format!("Pair again: {msg}")));
             }
         }
     }
@@ -395,8 +407,51 @@ impl App {
         self.popup = None;
     }
 
+    /// Connects to this machine's server through the local `t3` CLI, no link needed.
+    pub fn connect_local(&mut self) {
+        let Screen::Pair {
+            busy,
+            error,
+            local: Some(_),
+            ..
+        } = &mut self.screen
+        else {
+            return;
+        };
+        if *busy {
+            return;
+        }
+        *busy = true;
+        *error = None;
+        let (Some(handle), Some(home)) = (HANDLE.get().cloned(), pairing::local_home()) else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let result = session::pair_local_blocking(&home).map_err(|e| e.to_string());
+            handle.update(move |s, _| s.paired(result));
+        });
+    }
+
+    fn paired(&mut self, result: Result<Credential, String>) {
+        match result {
+            Ok(cred) => {
+                self.screen = Screen::Main;
+                self.start(cred);
+            }
+            Err(e) => {
+                if let Screen::Pair { busy, error, .. } = &mut self.screen {
+                    *busy = false;
+                    *error = Some(e);
+                }
+            }
+        }
+    }
+
     pub fn pair(&mut self) {
-        let Screen::Pair { link, busy, error } = &mut self.screen else {
+        let Screen::Pair {
+            link, busy, error, ..
+        } = &mut self.screen
+        else {
             return;
         };
         if *busy || link.text.trim().is_empty() {
@@ -410,18 +465,7 @@ impl App {
         };
         std::thread::spawn(move || {
             let result = session::pair_blocking(&text).map_err(|e| e.to_string());
-            handle.update(move |s, _| match result {
-                Ok(cred) => {
-                    s.screen = Screen::Main;
-                    s.start(cred);
-                }
-                Err(e) => {
-                    if let Screen::Pair { busy, error, .. } = &mut s.screen {
-                        *busy = false;
-                        *error = Some(e);
-                    }
-                }
-            });
+            handle.update(move |s, _| s.paired(result));
         });
     }
 
@@ -433,12 +477,18 @@ impl App {
         self.shell = ShellState::default();
         self.thread = None;
         self.selected = None;
-        self.screen = Screen::Pair {
-            link: focused(""),
-            error: None,
-            busy: false,
-        };
+        self.screen = Screen::pairing(None);
     }
+}
+
+/// Headless tooling runs (snapshots, scripts, trees) must never reach a real server.
+fn headless() -> bool {
+    std::env::args().any(|a| {
+        matches!(
+            a.as_str(),
+            "--snap" | "--script" | "--tree" | "--video" | "--frames" | "--trace"
+        )
+    })
 }
 
 pub fn focused(text: &str) -> TextEdit {
