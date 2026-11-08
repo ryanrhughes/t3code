@@ -1,7 +1,7 @@
 //! Drives a real turn on a dev server's free `Replay (dev)` provider through the same session and
 //! protocol code the UI uses: launch a thread, steer and queue follow-ups while it runs, accept
 //! approvals, answer questions, then print how the timeline landed.
-//! `cargo run -p t3-client --example turn -- [showcase|approval|question|multi-turn|queue-hold|plan-haiku]`.
+//! `cargo run -p t3-client --example turn -- [showcase|approval|question|multi-turn|queue-hold|worktree|plan-haiku]`.
 //! `plan-haiku` is the one paid scenario: Claude Haiku in plan mode, since only a real provider
 //! proposes a plan. It stops once the plan is ready, for the client to implement.
 //! Sandbox servers only: it starts turns, in a `rune-turns` project under the server's data
@@ -112,6 +112,9 @@ fn main() -> anyhow::Result<()> {
     );
     if scenario == "plan-haiku" {
         return plan_with_haiku(&handle, &seen, &project, &wait);
+    }
+    if scenario == "worktree" {
+        return launch_in_worktree(&handle, &seen, &project, &root, &wait);
     }
     let model = ModelSelection {
         instance_id: "devReplay".into(),
@@ -321,5 +324,61 @@ fn plan_with_haiku(
             .is_some_and(|t| t.has_actionable_proposed_plan == Some(true))
     })?;
     println!("plan ready on {id}");
+    Ok(())
+}
+
+/// Starts a replay thread in a new worktree off the project's default branch, as the
+/// composer's "New worktree" does, and reports where it landed.
+fn launch_in_worktree(
+    handle: &session::SessionHandle,
+    seen: &Arc<Mutex<Seen>>,
+    project: &str,
+    root: &str,
+    wait: &Wait,
+) -> anyhow::Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    handle.call(
+        "vcs.listRefs",
+        json!({ "cwd": root, "refKind": "local", "limit": 100 }),
+        move |r| drop(tx.send(r)),
+    );
+    let refs = rx
+        .recv_timeout(Duration::from_secs(15))?
+        .map_err(anyhow::Error::msg)?;
+    let list = refs["refs"].as_array().cloned().unwrap_or_default();
+    let base = list
+        .iter()
+        .find(|r| r["isDefault"] == true)
+        .or_else(|| list.iter().find(|r| r["current"] == true))
+        .and_then(|r| r["name"].as_str())
+        .ok_or_else(|| anyhow::anyhow!("no branch to start from: {refs}"))?
+        .to_owned();
+    println!("base branch {base} (of {} local)", list.len());
+    let model = ModelSelection {
+        instance_id: "devReplay".into(),
+        model: "showcase".into(),
+        options: None,
+    };
+    let mut input = protocol::launch_thread(project, "go", &model, "full-access");
+    input["workspaceStrategy"] = json!({ "type": "worktree", "baseRef": base });
+    handle.launch(input);
+    wait("the launch", 30, &|s| {
+        s.launched.is_some() || !s.failures.is_empty()
+    })?;
+    let id = seen.lock().unwrap().launched.clone();
+    let Some(id) = id else {
+        anyhow::bail!("launch failed: {:?}", seen.lock().unwrap().failures);
+    };
+    wait("the worktree", 60, &|s| {
+        s.shell
+            .thread(&id)
+            .is_some_and(|t| t.worktree_path.is_some())
+    })?;
+    let s = seen.lock().unwrap();
+    let t = s.shell.thread(&id).unwrap();
+    println!(
+        "thread {id} on branch {:?} in {:?}",
+        t.branch, t.worktree_path
+    );
     Ok(())
 }
