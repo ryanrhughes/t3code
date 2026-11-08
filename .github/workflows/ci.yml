@@ -570,6 +570,7 @@ jobs:
           node apps/rune/scripts/composer-reference.ts
           node apps/rune/scripts/shelves-reference.ts
           node apps/rune/scripts/keybindings-reference.ts
+          node apps/rune/scripts/git-actions-reference.ts
           git diff --exit-code -- apps/rune
 
       - name: Check Rust formatting

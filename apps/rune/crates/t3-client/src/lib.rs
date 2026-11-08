@@ -2,6 +2,7 @@
 //! contract types the UI reads, and the shell/thread reducers.
 pub mod attachments;
 pub mod composer;
+pub mod git;
 pub mod keybindings;
 pub mod pairing;
 pub mod protocol;

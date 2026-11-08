@@ -4,6 +4,7 @@ mod actions;
 mod attach;
 mod files;
 mod find;
+mod git;
 mod keys;
 mod notify;
 mod picker;
@@ -66,6 +67,7 @@ pub enum Popup {
     SettingsAccess,
     SettingsMachine,
     BaseBranch,
+    Git,
 }
 
 /// Which changes the diff panel shows.
@@ -199,6 +201,10 @@ pub struct App {
     /// A picked base branch, with the machine and project root it was picked for.
     pub draft_base: Option<(String, String, String)>,
     pub refs: Option<workspace::Refs>,
+    pub git: Option<git::Git>,
+    pub commit_dialog: Option<git::CommitDialog>,
+    /// An action on the default branch, waiting on the user's go-ahead.
+    pub git_confirm: Option<git::GitRun>,
     /// The queued message the composer is rewriting, by run id.
     pub editing_queued: Option<String>,
     /// The ordinary draft, set aside while the composer edits a queued message.
@@ -404,6 +410,9 @@ impl App {
             draft_worktree: None,
             draft_base: None,
             refs: None,
+            git: None,
+            commit_dialog: None,
+            git_confirm: None,
             editing_queued: None,
             stashed_draft: None,
             attachments: Vec::new(),
@@ -1647,6 +1656,7 @@ fn poll(s: &mut App, _now: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     s.sync_files();
+    s.sync_git();
     s.check_queued_edit(tx);
     // A draft headed for a worktree needs its project's branches for the base picker.
     if s.selected.is_none() && s.draft_in_worktree() {

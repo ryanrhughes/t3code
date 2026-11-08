@@ -55,6 +55,7 @@ enum SessionCmd {
     Call(String, Value, Reply),
     Subscribe(u64, String, Value, OnItem),
     Unsubscribe(u64),
+    Stream(String, Value, OnItem),
     Shutdown,
 }
 
@@ -113,6 +114,22 @@ impl SessionHandle {
 
     pub fn unsubscribe(&self, key: u64) {
         let _ = self.tx.send(SessionCmd::Unsubscribe(key));
+    }
+
+    /// A streaming RPC run once to its end, never reopened on a reconnect: for actions (a git
+    /// push) that must not repeat. A dropped connection ends it with an error.
+    pub fn stream(
+        &self,
+        tag: &str,
+        payload: Value,
+        on_item: impl FnMut(Option<Result<Value, String>>) + Send + 'static,
+    ) {
+        if let Err(mpsc::error::SendError(SessionCmd::Stream(_, _, mut on_item))) = self
+            .tx
+            .send(SessionCmd::Stream(tag.into(), payload, Box::new(on_item)))
+        {
+            on_item(Some(Err("Not connected to the server".into())));
+        }
     }
 }
 
@@ -205,6 +222,7 @@ async fn run(cred: Credential, sink: Sink, mut cmds: mpsc::UnboundedReceiver<Ses
                     Some(SessionCmd::Unsubscribe(key)) => {
                         subs.remove(&key);
                     }
+                    Some(SessionCmd::Stream(_, _, mut on_item)) => on_item(Some(Err("Not connected to the server".into()))),
                 },
             }
         }
@@ -342,6 +360,7 @@ async fn connected(
                     subs.remove(&key);
                     live.remove(&key);
                 }
+                Some(SessionCmd::Stream(tag, payload, on_item)) => open_once(&rpc, &tag, payload, on_item),
                 Some(SessionCmd::Launch(input)) => {
                     let (rpc, sink) = (rpc.clone(), sink.clone());
                     let thread_id = input.get("threadId").and_then(Value::as_str).unwrap_or_default().to_owned();
@@ -355,6 +374,26 @@ async fn connected(
             },
         }
     }
+}
+
+/// Runs one stream to its end. Unlike a subscription, a dropped connection is an error: the
+/// caller can't know how far the action got.
+fn open_once(rpc: &Rpc, tag: &str, payload: Value, mut on_item: OnItem) {
+    let (_, mut rx) = rpc.stream(tag, payload);
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Some(StreamMsg::Chunk(values)) => {
+                    values.into_iter().for_each(|v| on_item(Some(Ok(v))))
+                }
+                Some(StreamMsg::End(Ok(()))) => return on_item(None),
+                Some(StreamMsg::End(Err(rpc::RpcError::Disconnected))) | None => {
+                    return on_item(Some(Err("Lost the connection before it finished".into())));
+                }
+                Some(StreamMsg::End(Err(e))) => return on_item(Some(Err(e.message()))),
+            }
+        }
+    });
 }
 
 /// Forwards one subscription to its callback until the stream ends or the returned sender is

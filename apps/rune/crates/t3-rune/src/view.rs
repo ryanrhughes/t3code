@@ -95,6 +95,8 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(picker) = crate::picker::overlay(s, look) {
         layer.push(picker);
     }
+    crate::git::commit_dialog(s, look, &mut layer);
+    crate::git::confirm_dialog(s, look, &mut layer);
     if !s.toasts.is_empty() {
         let k = &look.kit;
         let region = s.toasts.iter().fold(ToastRegion::new(), |r, (id, msg, _)| {
@@ -253,10 +255,14 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
         .on_press(|s: &mut App| s.toggle_inspector(Inspector::Files))
         .build(k)
         .key("files-toggle");
+    let mut trailing = row().gap(4.0).center_y().shrink().min_w(0.0);
+    if !s.settings_open {
+        if let Some(git) = crate::git::control(s, look, layer) {
+            trailing = trailing.child(git);
+        }
+    }
     let toolbar = Toolbar::new().title(title).trailing(
-        row()
-            .gap(4.0)
-            .center_y()
+        trailing
             .child(files_toggle)
             .child(diff_toggle)
             .child(theme_menu(s, look, layer)),
