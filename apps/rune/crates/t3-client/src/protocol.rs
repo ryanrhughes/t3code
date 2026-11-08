@@ -150,6 +150,9 @@ pub struct ServerConfig {
     /// The shell can leave older settled threads out (`omitOlderSettled`).
     #[serde(default)]
     pub shell_older_settled: bool,
+    /// The defaults plus the user's keybindings.json, resolved (`crate::keybindings::decode`).
+    #[serde(default)]
+    pub keybindings: Value,
 }
 
 impl ServerConfig {
@@ -196,6 +199,9 @@ pub enum ServerConfigEvent {
     SettingsUpdated {
         payload: SettingsPayload,
     },
+    KeybindingsUpdated {
+        payload: KeybindingsPayload,
+    },
     /// Raw `EnvironmentTheme` objects; `t3_theme::environment_theme` validates each.
     EnvironmentThemesUpdated {
         payload: ThemesPayload,
@@ -212,6 +218,11 @@ pub struct ProvidersPayload {
 #[derive(Clone, Debug, Deserialize)]
 pub struct SettingsPayload {
     pub settings: Value,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct KeybindingsPayload {
+    pub keybindings: Value,
 }
 
 #[derive(Clone, Debug, Deserialize)]

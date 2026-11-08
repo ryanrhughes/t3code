@@ -92,6 +92,9 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(dialog) = crate::actions::rename_dialog(s, look) {
         layer.push(dialog);
     }
+    if let Some(picker) = crate::picker::overlay(s, look) {
+        layer.push(picker);
+    }
     if !s.toasts.is_empty() {
         let k = &look.kit;
         let region = s.toasts.iter().fold(ToastRegion::new(), |r, (id, msg, _)| {
@@ -266,6 +269,10 @@ fn main_screen(s: &App, cx: &mut Cx<App>, look: &Look, layer: &mut Vec<El>) -> E
         .fill(look.canvas);
     let main = if s.settings_open {
         main.child(crate::settings::page(s, look, layer))
+    } else if let Some(bar) = crate::find::bar(s, look) {
+        main.child(row().w_full().justify_end().px(16.0).pt(8.0).child(bar))
+            .child(timeline(s, look))
+            .child(composer(s, look, layer))
     } else {
         main.child(timeline(s, look))
             .child(composer(s, look, layer))
@@ -377,6 +384,17 @@ pub fn folder_key(s: &App, env: usize, project: &str) -> String {
 
 /// The sidebar as one flat list (shelves, project headers and their threads) so it virtualises.
 /// Every paired environment's threads are listed; with more than one, folders name their machine.
+/// Every thread row in sidebar order, for stepping to the previous or next thread.
+pub fn thread_order(s: &App) -> Vec<(usize, String)> {
+    entries(s)
+        .into_iter()
+        .filter_map(|e| match e {
+            Entry::Thread { env, id, .. } => Some((env, id)),
+            _ => None,
+        })
+        .collect()
+}
+
 fn entries(s: &App) -> Vec<Entry> {
     let now = now_secs();
     let now_ms = now * 1000;

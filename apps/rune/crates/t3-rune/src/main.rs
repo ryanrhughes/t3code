@@ -3,7 +3,10 @@
 mod actions;
 mod attach;
 mod files;
+mod find;
+mod keys;
 mod notify;
+mod picker;
 mod plan;
 mod prefs;
 mod queue;
@@ -118,6 +121,8 @@ pub struct Env {
     pub themes: Vec<ThemeDefinition>,
     /// Which session the events come from; a replaced session's late ones are dropped.
     generation: u64,
+    /// The server's resolved keybindings: the web's defaults plus the user's.
+    pub keys: Vec<t3_client::keybindings::Rule>,
     pub watch: notify::Watch,
 }
 
@@ -185,6 +190,10 @@ pub struct App {
     pub rename: Option<actions::Rename>,
     /// Plan mode for the next new thread (an open thread keeps its own on the server).
     pub draft_plan: bool,
+    /// The Ctrl/Cmd+P file picker, when open.
+    pub picker: Option<picker::FilePicker>,
+    /// Find in the open thread (Ctrl/Cmd+F), when open.
+    pub find: Option<find::Find>,
     /// A new thread's workspace: a new worktree (Some(true)), the checkout, or the server default.
     pub draft_worktree: Option<bool>,
     pub draft_base: Option<String>,
@@ -384,6 +393,8 @@ impl App {
             thread_menu: None,
             rename: None,
             draft_plan: false,
+            picker: None,
+            find: None,
             draft_worktree: None,
             draft_base: None,
             refs: None,
@@ -435,6 +446,7 @@ impl App {
             themes: Vec::new(),
             generation,
             watch: Default::default(),
+            keys: Vec::new(),
         };
         match self.env_index(&env_id) {
             Some(i) => {
@@ -543,7 +555,11 @@ impl App {
                             self.rebuild_looks();
                         }
                     }
+                    self.envs[idx].keys = t3_client::keybindings::decode(&config.keybindings);
                     self.envs[idx].config = Some(config);
+                }
+                ServerConfigEvent::KeybindingsUpdated { payload } => {
+                    self.envs[idx].keys = t3_client::keybindings::decode(&payload.keybindings);
                 }
                 ServerConfigEvent::ProviderStatuses { payload } => {
                     if let Some(c) = self.envs[idx].config.as_mut() {
@@ -694,6 +710,7 @@ impl App {
     /// Drops everything shown for the open thread: its detail, streams, diff and model pick.
     /// The diff's request counter keeps climbing, so a late answer can't land in the next view.
     fn clear_thread_view(&mut self) {
+        self.find = None;
         if self.editing_queued.take().is_some() {
             self.composer = focused("");
         }
@@ -1680,39 +1697,33 @@ fn frame_counter() -> impl FnMut(&rune::FrameEncoded) {
 }
 
 fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    if ev.is_command('k') {
-        s.toggle_palette();
+    use rune::Key;
+    // Escape closes the innermost thing first; the inspector is last, so a squeezed window
+    // always has a way out.
+    if matches!(ev.key, Key::Escape) {
+        if s.find.is_some() {
+            s.close_find();
+        } else if s.editing_queued.is_some() {
+            s.cancel_queued_edit();
+        } else if s.rename.is_some() {
+            s.finish_rename(false);
+        } else if s.popup.is_some() {
+            s.popup = None;
+        } else if s.settings_open {
+            s.toggle_settings();
+        } else if s.diff_pane.is_open() && s.inspector == Inspector::Files && s.files.open.is_some()
+        {
+            s.close_file();
+        } else if s.diff_pane.is_open() {
+            s.diff_pane.set_open(false);
+            s.fit();
+        } else {
+            return false;
+        }
         return true;
     }
-    // Ctrl/Cmd+D shows and hides the changes, as the web's `diff.toggle`.
-    if !ev.mods.shift
-        && (ev.mods.cmd || ev.mods.ctrl)
-        && tx.physical_key() == Some(rune::PhysicalKeyCode::KeyD)
-    {
-        s.toggle_diff();
-        return true;
-    }
-    if shell::is_sidebar_toggle(ev) {
-        s.sidebar.toggle();
-        return true;
-    }
-    if ev.is_command('n') && !ev.mods.shift {
-        s.new_thread(None);
-        return true;
-    }
-    // Ctrl/Cmd+Shift+A switches plan mode, as the web's `composer.mode`.
-    if ev.mods.shift
-        && (ev.mods.cmd || ev.mods.ctrl)
-        && tx.physical_key() == Some(rune::PhysicalKeyCode::KeyA)
-    {
-        s.toggle_plan_mode();
-        return true;
-    }
+    // Rune's own: settings and stop, which the web has no binding for.
     if ev.is_command(',') {
-        s.toggle_settings();
-        return true;
-    }
-    if matches!(ev.key, rune::Key::Escape) && s.settings_open && s.popup.is_none() {
         s.toggle_settings();
         return true;
     }
@@ -1720,45 +1731,24 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.stop();
         return true;
     }
-    if matches!(ev.key, rune::Key::Escape) && s.editing_queued.is_some() {
-        s.cancel_queued_edit();
-        return true;
+    // Everything else follows the server's keybindings, the user's own included.
+    if s.env().is_some_and(|e| !e.keys.is_empty()) {
+        return s.run_shortcut(ev, tx);
     }
-    // The web's thread.steerQueuedMessage and thread.editQueuedMessage.
-    if matches!(ev.key, rune::Key::Enter)
-        && ev.mods.shift
-        && (ev.mods.cmd || ev.mods.ctrl)
-        && s.send_next_queued()
-    {
-        return true;
+    // No server has sent its keybindings yet: the web's defaults for the few that matter.
+    let ctrl = ev.mods.cmd || ev.mods.ctrl;
+    if ev.is_command('k') {
+        s.toggle_palette();
+    } else if ctrl && !ev.mods.shift && tx.physical_key() == Some(rune::PhysicalKeyCode::KeyD) {
+        s.toggle_diff();
+    } else if shell::is_sidebar_toggle(ev) {
+        s.sidebar.toggle();
+    } else if ev.is_command('n') && !ev.mods.shift {
+        s.new_thread(None);
+    } else {
+        return false;
     }
-    if matches!(ev.key, rune::Key::Up) && ev.mods.alt && s.edit_last_queued() {
-        return true;
-    }
-    if matches!(ev.key, rune::Key::Escape) && s.rename.is_some() {
-        s.finish_rename(false);
-        return true;
-    }
-    if matches!(ev.key, rune::Key::Escape) && s.popup.is_some() {
-        s.popup = None;
-        return true;
-    }
-    if matches!(ev.key, rune::Key::Escape)
-        && s.diff_pane.is_open()
-        && s.inspector == Inspector::Files
-        && s.files.open.is_some()
-    {
-        s.close_file();
-        return true;
-    }
-    // Last in line for Escape: the inspector closes, so a squeezed window always has a way out.
-    if matches!(ev.key, rune::Key::Escape) && s.diff_pane.is_open() && s.popup.is_none() {
-        s.diff_pane.set_open(false);
-        s.fit();
-        return true;
-    }
-    let _ = tx;
-    false
+    true
 }
 
 /// Headless scenes over captured wire data (`T3_RUNE_FIXTURE`, written by
@@ -1787,6 +1777,7 @@ fn load_fixture(s: &mut App) {
         themes: Vec::new(),
         generation: 0,
         watch: Default::default(),
+        keys: Vec::new(),
     }];
     s.focus = 0;
     let mut themes = Vec::new();
