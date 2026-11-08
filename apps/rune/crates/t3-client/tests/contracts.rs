@@ -94,6 +94,24 @@ fn every_command_the_client_sends_matches_the_contract() {
         "vcs.listRefs",
         json!({ "cwd": "/repo", "refKind": "local", "limit": 100 }),
     );
+    // Implement in new thread: the new thread works where the plan's did.
+    decodes::<Dispatch>(
+        "thread.create",
+        json!({
+            "type": "thread.create",
+            "commandId": "c1",
+            "createdBy": "user",
+            "creationSource": "web",
+            "threadId": "t2",
+            "projectId": "p1",
+            "title": "Implement the plan",
+            "modelSelection": model,
+            "runtimeMode": "full-access",
+            "interactionMode": "default",
+            "branch": "t3/feature",
+            "worktreePath": "/w/feature",
+        }),
+    );
     // The sidebar's thread actions.
     for (kind, extra) in [
         ("thread.pin", json!({})),
@@ -122,6 +140,12 @@ fn every_command_the_client_sends_matches_the_contract() {
         (
             "queued-run.edit",
             json!({ "runId": "r2", "text": "reworded" }),
+        ),
+        (
+            "queued-run.edit",
+            json!({ "runId": "r2", "text": "with a file", "attachments": [
+                { "type": "image", "id": "a1", "name": "shot.png", "mimeType": "image/png", "sizeBytes": 10 }
+            ] }),
         ),
         (
             "queued-message.promote-to-steer",

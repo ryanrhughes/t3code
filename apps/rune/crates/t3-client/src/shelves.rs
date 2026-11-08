@@ -149,6 +149,49 @@ fn raised_hand(t: &ThreadShell) -> bool {
     }
 }
 
+/// `threadWokeAt`: when a snoozed thread woke, early (a new question or failure) or on time;
+/// `None` while it still sleeps. A visit has to reach this, or the web keeps showing "Woke".
+pub fn thread_woke_at(t: &ThreadShell, now_ms: i64) -> Option<String> {
+    let wake = iso_ms(t.snoozed_until.as_deref()?)?;
+    if raised_hand(t) {
+        let snoozed = t.snoozed_at.as_deref().and_then(iso_ms);
+        let failed = failure_edge_at(t).flatten();
+        let fresh_failure = failed.is_some_and(|f| match (t.snoozed_at.as_deref(), iso_ms(f)) {
+            (None, _) => true,
+            (Some(_), Some(f)) => snoozed.is_some_and(|s| f > s),
+            _ => false,
+        });
+        let asked = (request_kind(t) == Some("user_input"))
+            .then(|| {
+                t.pending_runtime_request
+                    .as_ref()?
+                    .get("createdAt")?
+                    .as_str()
+            })
+            .flatten();
+        let fresh_question = asked.is_some_and(|q| match (iso_ms(q), snoozed) {
+            (Some(q), Some(s)) => q > s,
+            _ => false,
+        });
+        if fresh_failure
+            && (!fresh_question
+                || iso_ms(failed.unwrap())
+                    .zip(asked.and_then(iso_ms))
+                    .is_some_and(|(f, q)| f >= q))
+        {
+            return failed.map(str::to_owned);
+        }
+        if fresh_question {
+            return asked.map(str::to_owned);
+        }
+        return match runtime_status(t) {
+            Some(_) => Some(t.updated_at.clone()),
+            None => t.snoozed_at.clone(),
+        };
+    }
+    (wake <= now_ms).then(|| t.snoozed_until.clone()).flatten()
+}
+
 /// `effectiveSnoozed`: hidden on the Snoozed shelf until `snoozedUntil`, unless it raised its
 /// hand first.
 pub fn is_snoozed(t: &ThreadShell, now_ms: i64) -> bool {

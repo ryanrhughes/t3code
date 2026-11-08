@@ -252,10 +252,21 @@ impl App {
         let Some(last_visited) = &t.last_visited_at else {
             return;
         };
-        let Some(updated) = iso_ms(&t.updated_at) else {
+        let Some(shell_updated) = iso_ms(&t.updated_at) else {
             return;
         };
-        let visited_at = t.updated_at.clone();
+        // A wake later than the last update is an update the server never sent: the watermark
+        // moves to it, at once, or the web keeps showing "Woke".
+        let woke = t3_client::shelves::thread_woke_at(t, now_ms());
+        let woke_ms = woke
+            .as_deref()
+            .and_then(iso_ms)
+            .filter(|w| *w > shell_updated);
+        let (visited_at, updated) = match (woke, woke_ms) {
+            (Some(w), Some(ms)) => (w, ms),
+            _ => (t.updated_at.clone(), shell_updated),
+        };
+        let wake_is_latest = woke_ms.is_some();
         let last_visited = last_visited.as_deref().and_then(iso_ms);
         let unseen = latest_run_completed_at(t)
             .and_then(iso_ms)
@@ -276,7 +287,7 @@ impl App {
                 return;
             }
             let wait = VISIT_THROTTLE_MS - (now_ms() - v.last_dispatch_at);
-            if !unseen && wait > 0 {
+            if !unseen && !wake_is_latest && wait > 0 {
                 v.due = Some(now_ms() + wait);
                 return;
             }

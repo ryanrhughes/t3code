@@ -196,10 +196,13 @@ pub struct App {
     pub find: Option<find::Find>,
     /// A new thread's workspace: a new worktree (Some(true)), the checkout, or the server default.
     pub draft_worktree: Option<bool>,
-    pub draft_base: Option<String>,
+    /// A picked base branch, with the machine and project root it was picked for.
+    pub draft_base: Option<(String, String, String)>,
     pub refs: Option<workspace::Refs>,
     /// The queued message the composer is rewriting, by run id.
     pub editing_queued: Option<String>,
+    /// The ordinary draft, set aside while the composer edits a queued message.
+    pub stashed_draft: Option<TextEdit>,
     /// Files on their way into the next message.
     pub attachments: Vec<attach::Attachment>,
     next_attachment: u64,
@@ -336,6 +339,9 @@ fn output_key(item_id: &str) -> u64 {
     h.finish()
 }
 
+/// `ATTACHMENT_ONLY_BOOTSTRAP_PROMPT`: what a message of only attachments says.
+const ATTACHMENT_ONLY_PROMPT: &str = "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]";
+
 const NARROW: f32 = 720.0;
 /// The thread column never gets narrower than this while the window can afford it.
 const MAIN_MIN: f32 = 420.0;
@@ -399,6 +405,7 @@ impl App {
             draft_base: None,
             refs: None,
             editing_queued: None,
+            stashed_draft: None,
             attachments: Vec::new(),
             next_attachment: 0,
             archived: None,
@@ -712,7 +719,7 @@ impl App {
     fn clear_thread_view(&mut self) {
         self.find = None;
         if self.editing_queued.take().is_some() {
-            self.composer = focused("");
+            self.composer = self.stashed_draft.take().unwrap_or_else(|| focused(""));
         }
         self.thread = None;
         self.model = None;
@@ -777,9 +784,6 @@ impl App {
                     .map(|p| p.id.clone())
             });
         self.open_thread(None);
-        if self.draft_project != project {
-            self.draft_base = None;
-        }
         self.draft_project = project;
     }
 
@@ -832,16 +836,23 @@ impl App {
     /// Sends the composer. `alternate` is the Ctrl/Cmd variant: queue instead of steer while the
     /// agent works.
     pub fn send(&mut self, alternate: bool, tx: &mut Tx) {
-        let text = self.composer.text.trim().to_owned();
-        if text.is_empty() {
+        let mut text = self.composer.text.trim().to_owned();
+        if let Some(run) = self.editing_queued.clone() {
+            if !text.is_empty() {
+                self.save_queued_edit(run, text, tx);
+            }
+            return;
+        }
+        let env_id = self.env().map(|e| e.cred.environment_id.clone());
+        let pending = self
+            .attachments
+            .iter()
+            .any(|a| Some(&a.env_id) == env_id.as_ref());
+        if text.is_empty() && !pending {
             // Sending nothing while a plan waits implements it, as the web's composer does.
             if self.ready_plan().is_some() {
                 self.implement_plan(tx);
             }
-            return;
-        }
-        if let Some(run) = self.editing_queued.clone() {
-            self.save_queued_edit(run, text);
             return;
         }
         let Some(session) = self.session() else {
@@ -854,6 +865,10 @@ impl App {
                 return;
             }
         };
+        if text.is_empty() {
+            // Files alone go with the web's stand-in prompt.
+            text = ATTACHMENT_ONLY_PROMPT.to_owned();
+        }
         let Some(model) = self.effective_model() else {
             self.toast("No provider is ready on this server", tx);
             return;
@@ -1632,6 +1647,7 @@ fn poll(s: &mut App, _now: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     s.sync_files();
+    s.check_queued_edit(tx);
     // A draft headed for a worktree needs its project's branches for the base picker.
     if s.selected.is_none() && s.draft_in_worktree() {
         s.load_refs();
@@ -1643,6 +1659,8 @@ fn poll(s: &mut App, _now: f64, tx: &mut Tx) -> bool {
     let now_ms = now * 1000;
     if s.snooze_wake.is_some_and(|w| w <= now_ms) {
         changed = true;
+        // The open thread may have just woken: its visit moves to the wake.
+        s.track_visit();
     }
     s.snooze_wake = s
         .envs

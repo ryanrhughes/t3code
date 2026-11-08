@@ -2175,6 +2175,11 @@ fn composer(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
             if !ev.mods.cmd && !ev.mods.ctrl && s.menu_key(&ev.key) {
                 return true;
             }
+            // A focused field takes Escape to blur before on_key sees it.
+            if matches!(ev.key, rune::Key::Escape) && s.editing_queued.is_some() {
+                s.cancel_queued_edit();
+                return true;
+            }
             let alternate = matches!(ev.key, rune::Key::Enter)
                 && (ev.mods.cmd || ev.mods.ctrl)
                 && !ev.mods.shift;
@@ -2389,7 +2394,12 @@ fn model_menu(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
                 continue;
             }
             menu = menu.group_label(d.label.clone());
-            for o in &d.options {
+            // Choices applied by rewriting the prompt (ultrathink) aren't options to send.
+            for o in d
+                .options
+                .iter()
+                .filter(|o| !d.prompt_injected_values.contains(&o.id))
+            {
                 let (sel, id, pick) = (sel.clone(), d.id.clone(), o.id.clone());
                 let mut item = MenuItem::new(o.label.clone()).checked(value == o.id.as_str());
                 if let Some(desc) = &o.description {

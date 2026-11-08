@@ -190,7 +190,7 @@ fn main() -> anyhow::Result<()> {
             "held queue on {id}: {:?}",
             t.queued_runs()
                 .iter()
-                .map(|(r, text)| (&r.id, text))
+                .map(|q| (&q.run.id, &q.text))
                 .collect::<Vec<_>>()
         );
         return Ok(());

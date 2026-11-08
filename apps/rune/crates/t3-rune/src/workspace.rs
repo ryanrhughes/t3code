@@ -8,10 +8,14 @@ use serde_json::{Value, json};
 use crate::theme::Look;
 use crate::{App, HANDLE, Popup};
 
-/// A project's local branches, for the base branch picker.
+/// A project's local branches, for the base branch picker. Keyed by machine and root: two
+/// machines can have the same path.
 pub struct Refs {
+    pub env_id: String,
     pub root: String,
     pub loading: bool,
+    /// When a read failed; another try waits a few seconds.
+    pub failed_at: Option<i64>,
     /// (name, is the default branch, is checked out).
     pub list: Vec<(String, bool, bool)>,
 }
@@ -44,13 +48,24 @@ impl App {
         }
     }
 
-    /// The branch a new worktree starts from: the pick, else the default branch, else the one
-    /// checked out.
+    /// The draft's machine and project root, which a branch list and a picked base belong to.
+    fn draft_key(&self) -> Option<(String, String)> {
+        Some((self.env()?.cred.environment_id.clone(), self.draft_root()?))
+    }
+
+    /// The branch a new worktree starts from: the pick for this project, else the default
+    /// branch, else the one checked out.
     pub fn draft_base(&self) -> Option<String> {
-        if let Some(b) = &self.draft_base {
-            return Some(b.clone());
+        let key = self.draft_key()?;
+        if let Some((env, root, branch)) = &self.draft_base {
+            if (env, root) == (&key.0, &key.1) {
+                return Some(branch.clone());
+            }
         }
-        let refs = self.refs.as_ref()?;
+        let refs = self
+            .refs
+            .as_ref()
+            .filter(|r| (&r.env_id, &r.root) == (&key.0, &key.1))?;
         refs.list
             .iter()
             .find(|r| r.1)
@@ -60,24 +75,33 @@ impl App {
 
     /// Loads the draft project's local branches, once per project.
     pub fn load_refs(&mut self) {
-        let Some(root) = self.draft_root() else {
+        let Some((env_id, root)) = self.draft_key() else {
             return;
         };
-        if self.refs.as_ref().is_some_and(|r| r.root == root) {
+        let now = crate::now_secs();
+        if self.refs.as_ref().is_some_and(|r| {
+            (&r.env_id, &r.root) == (&env_id, &root) && r.failed_at.is_none_or(|at| now - at < 10)
+        }) {
             return;
         }
         let (Some(session), Some(handle)) = (self.session(), HANDLE.get().cloned()) else {
             return;
         };
         self.refs = Some(Refs {
+            env_id: env_id.clone(),
             root: root.clone(),
             loading: true,
+            failed_at: None,
             list: Vec::new(),
         });
         let input = json!({ "cwd": root, "refKind": "local", "limit": 100 });
         session.call("vcs.listRefs", input, move |result| {
             handle.update(move |s: &mut App, tx| {
-                let Some(refs) = s.refs.as_mut().filter(|r| r.root == root) else {
+                let Some(refs) = s
+                    .refs
+                    .as_mut()
+                    .filter(|r| (&r.env_id, &r.root) == (&env_id, &root))
+                else {
                     return;
                 };
                 refs.loading = false;
@@ -103,7 +127,11 @@ impl App {
                             s.draft_worktree = Some(false);
                         }
                     }
-                    Err(e) => s.toast(format!("Couldn't list branches: {e}"), tx),
+                    Err(e) => {
+                        // Tried again shortly, from poll; until then the draft can't launch.
+                        refs.failed_at = Some(crate::now_secs());
+                        s.toast(format!("Couldn't list branches: {e}"), tx);
+                    }
                 }
             });
         });
@@ -151,7 +179,8 @@ pub fn controls(s: &App, look: &Look, layer: &mut Vec<El>) -> Vec<El> {
                     .on_close(|s: &mut App| s.popup = None)
                     .on_choose(|s: &mut App, label: &str, _: &mut rune::Tx| {
                         s.popup = None;
-                        s.draft_base = label.strip_prefix("from ").map(str::to_owned);
+                        let branch = label.strip_prefix("from ").map(str::to_owned);
+                        s.draft_base = s.draft_key().zip(branch).map(|((e, r), b)| (e, r, b));
                     })
                     .build(k, layer)
                     .key("base-branch-select"),

@@ -4,7 +4,7 @@ use serde_json::Value;
 use t3_client::protocol::ThreadShell;
 use t3_client::shelves::{
     Notice, NotificationGate, has_unseen_completion, is_snoozed, iso_ms, observe, sidebar_status,
-    sort_pinned,
+    sort_pinned, thread_woke_at,
 };
 
 #[test]
@@ -21,6 +21,16 @@ fn sidebar_rules_match_the_web() {
         if got != want {
             failures.push(format!(
                 "snoozed {}: rust {got} != web {want}",
+                case["name"]
+            ));
+        }
+    }
+    for case in fixture["snoozed"].as_array().unwrap() {
+        let got = thread_woke_at(&shell(&case["shell"]), now);
+        let want = case["woke"].as_str().map(str::to_owned);
+        if got != want {
+            failures.push(format!(
+                "woke {}: rust {got:?} != web {want:?}",
                 case["name"]
             ));
         }

@@ -29,7 +29,8 @@ const { OrchestrationV2ThreadShell } = await import("@t3tools/contracts");
 const Schema = await import("effect/Schema");
 // As shells arrive off the wire: JSON decoded by the contract.
 const decodeShell = Schema.decodeUnknownSync(Schema.toCodecJson(OrchestrationV2ThreadShell));
-const { effectiveSnoozed } = await import("@t3tools/client-runtime/state/thread-settled");
+const { effectiveSnoozed, threadWokeAt } =
+  await import("@t3tools/client-runtime/state/thread-settled");
 const { sortPinnedThreadsByOrderKey } = await import("@t3tools/client-runtime/state/thread-sort");
 // Sidebar.logic.ts imports the web's React modules, which Node can't load. Its
 // `hasUnseenCompletion` is pure, so run that function's own source, types stripped.
@@ -328,7 +329,12 @@ const fixture = {
   now: NOW,
   snoozed: Object.entries(snoozeCases).map(([name, over]) => {
     const s = build(over);
-    return { name, shell: s, snoozed: effectiveSnoozed(present(s), { now: NOW }) };
+    return {
+      name,
+      shell: s,
+      snoozed: effectiveSnoozed(present(s), { now: NOW }),
+      woke: threadWokeAt(present(s), { now: NOW }),
+    };
   }),
   unread: Object.entries(unreadCases).map(([name, over]) => {
     const s = build(over);

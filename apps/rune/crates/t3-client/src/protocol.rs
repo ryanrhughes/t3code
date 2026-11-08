@@ -67,6 +67,8 @@ pub struct OptionDescriptor {
     pub kind: String,
     pub options: Vec<OptionChoice>,
     pub current_value: Option<Value>,
+    /// Choices the client applies by rewriting the prompt (Claude's `ultrathink`), not by option.
+    pub prompt_injected_values: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -649,6 +651,20 @@ pub struct Message {
     pub role: String,
     pub text: String,
     pub context: Option<Value>,
+    pub attachments: Vec<Value>,
+    /// A child's result or a notification the server delivers as a message: not the user's to
+    /// edit or remove (`getUserQueuedThreadRuns`).
+    pub delegated_completion: Option<Value>,
+    pub notification: Option<Value>,
+}
+
+impl Message {
+    /// `isCompactionCommandMessage`: a bare `/compact` from the user.
+    pub fn is_compaction(&self) -> bool {
+        self.role == "user"
+            && self.text.trim().eq_ignore_ascii_case("/compact")
+            && self.attachments.is_empty()
+    }
 }
 
 /// A turn's snapshot of the workspace. Those with `app_run_ordinal` are the turns a diff spans:

@@ -32,6 +32,15 @@ pub struct OlderSettled {
 /// Older settled pages hold at most this many.
 pub const OLDER_SETTLED_PAGE: usize = 50;
 
+/// A message waiting behind the active run.
+pub struct Queued<'a> {
+    pub run: &'a Run,
+    pub text: String,
+    pub editable: bool,
+    /// The message's own attachments, which an edit that adds files has to keep.
+    pub attachments: Vec<serde_json::Value>,
+}
+
 impl ShellState {
     pub fn is_below_cut(&self, t: &ThreadShell) -> bool {
         let Some(o) = &self.older else { return false };
@@ -410,23 +419,27 @@ impl ThreadState {
 
     /// Queued user messages in the order they'll run (`deriveThreadQueueWorkflowState`):
     /// queue position, else run order. Each with the text of its message.
-    pub fn queued_runs(&self) -> Vec<(&Run, String)> {
+    pub fn queued_runs(&self) -> Vec<Queued<'_>> {
         let mut runs: Vec<&Run> = self.runs.iter().filter(|r| r.status == "queued").collect();
         runs.sort_by_key(|r| (r.queue_position.unwrap_or(r.ordinal), r.ordinal));
         runs.into_iter()
-            .map(|run| {
-                // A guest's queued message shows the guest's words, as the web's does.
+            .filter_map(|run| {
                 let message = self
                     .messages
                     .iter()
                     .find(|m| Some(&m.id) == run.user_message_id.as_ref());
-                let from_message = message.map(|m| {
-                    m.context
-                        .as_ref()
-                        .and_then(|c| c["guest"]["text"].as_str())
-                        .map_or_else(|| m.text.clone(), str::to_owned)
-                });
-                let text = from_message
+                // A child's result or a notification waiting to be delivered isn't the user's.
+                if message
+                    .is_some_and(|m| m.delegated_completion.is_some() || m.notification.is_some())
+                {
+                    return None;
+                }
+                let guest =
+                    message.and_then(|m| m.context.as_ref()?.get("guest")?.get("text")?.as_str());
+                // A guest's queued message shows the guest's words, as the web's does.
+                let text = guest
+                    .map(str::to_owned)
+                    .or_else(|| message.map(|m| m.text.clone()))
                     .or_else(|| {
                         self.turn_items
                             .iter()
@@ -439,9 +452,33 @@ impl ThreadState {
                             .and_then(|i| i.text.clone())
                     })
                     .unwrap_or_else(|| "Queued message".into());
-                (run, text)
+                Some(Queued {
+                    run,
+                    text,
+                    // The owner can cancel a guest's message, not rewrite it.
+                    editable: guest.is_none(),
+                    attachments: message.map(|m| m.attachments.clone()).unwrap_or_default(),
+                })
             })
             .collect()
+    }
+
+    /// The active run is a `/compact`, so sending a queued message stops it instead of
+    /// steering (`promoteSkipsCompaction`).
+    pub fn promote_skips_compaction(&self) -> bool {
+        let Some(run) = self.active_run() else {
+            return false;
+        };
+        self.messages
+            .iter()
+            .any(|m| Some(&m.id) == run.user_message_id.as_ref() && m.is_compaction())
+    }
+
+    /// Whether "Send now" can take a queued message (`canSendRun`): a turn of its own when
+    /// nothing runs, else steered in, which a fresh-context message can only do past a compaction.
+    pub fn can_send_queued(&self, fresh_context: bool) -> bool {
+        let skips = self.promote_skips_compaction();
+        self.can_send_now() || ((skips || self.can_steer()) && (!fresh_context || skips))
     }
 
     /// Stopping the thread held its queue; it waits for `queue.resume`.
@@ -737,7 +774,7 @@ mod tests {
         let order: Vec<_> = s
             .queued_runs()
             .iter()
-            .map(|(r, t)| (r.id.clone(), t.clone()))
+            .map(|q| (q.run.id.clone(), q.text.clone()))
             .collect();
         assert_eq!(
             order,
@@ -750,6 +787,49 @@ mod tests {
         assert!(!s.queue_held() && s.can_send_now());
         s.runs[3].queue_held = Some(true);
         assert!(s.queue_held());
+
+        // A child's result waiting for delivery isn't the user's to see or edit, and a guest's
+        // message can be cancelled but not rewritten.
+        s.messages.push(crate::protocol::Message {
+            id: "m-b".into(),
+            delegated_completion: Some(serde_json::json!({})),
+            ..Default::default()
+        });
+        s.messages.push(crate::protocol::Message {
+            id: "m-a".into(),
+            text: "owner's words".into(),
+            context: Some(serde_json::json!({ "guest": { "text": "guest's words" } })),
+            ..Default::default()
+        });
+        let shown: Vec<_> = s
+            .queued_runs()
+            .iter()
+            .map(|q| (q.run.id.clone(), q.text.clone(), q.editable))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("a".into(), "guest's words".into(), false),
+                ("c".into(), "from the conversation".into(), true),
+            ]
+        );
+
+        // While a /compact runs, a queued message (even a fresh-context one) can stop it.
+        s.runs.push(Run {
+            id: "compacting".into(),
+            status: "running".into(),
+            ordinal: 9,
+            user_message_id: Some("m-compact".into()),
+            ..Default::default()
+        });
+        assert!(!s.can_send_queued(true));
+        s.messages.push(crate::protocol::Message {
+            id: "m-compact".into(),
+            role: "user".into(),
+            text: " /compact ".into(),
+            ..Default::default()
+        });
+        assert!(s.promote_skips_compaction() && s.can_send_queued(true));
     }
 
     #[test]

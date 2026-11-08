@@ -7,7 +7,7 @@ use serde_json::json;
 use t3_client::protocol::{self, PLAN_PROMPT_PREFIX, plan_title, thread_command};
 
 use crate::theme::Look;
-use crate::{App, focused};
+use crate::{App, HANDLE, focused};
 
 /// A proposed plan waiting on the user.
 pub struct ReadyPlan {
@@ -62,15 +62,50 @@ impl App {
         })
     }
 
-    /// Implements the ready plan in its own thread: out of plan mode, then the plan as the message.
-    pub fn implement_plan(&mut self, tx: &mut Tx) {
-        let (Some(plan), Some(thread), Some(session)) =
-            (self.ready_plan(), self.selected.clone(), self.session())
-        else {
+    /// Sends commands one after another, each once the server accepted the one before; `then`
+    /// runs after the last. Plain dispatches race, and these depend on their order.
+    pub fn dispatch_in_order(
+        &mut self,
+        env_id: String,
+        mut commands: Vec<serde_json::Value>,
+        then: Option<Box<dyn FnOnce(&mut App, &mut Tx) + Send>>,
+    ) {
+        let (Some(i), Some(handle)) = (self.env_index(&env_id), HANDLE.get().cloned()) else {
             return;
         };
+        let Some(session) = self.envs[i].session.clone() else {
+            return;
+        };
+        if commands.is_empty() {
+            return;
+        }
+        let first = commands.remove(0);
+        session.call("orchestration.dispatchCommand", first, move |result| {
+            handle.update(move |s: &mut App, tx| match result {
+                Err(e) => s.toast(e, tx),
+                Ok(_) if commands.is_empty() => {
+                    if let Some(then) = then {
+                        then(s, tx)
+                    }
+                }
+                Ok(_) => s.dispatch_in_order(env_id, commands, then),
+            });
+        });
+    }
+
+    /// Implements the ready plan in its own thread: out of plan mode first, then the plan as
+    /// the message, in that order.
+    pub fn implement_plan(&mut self, tx: &mut Tx) {
+        let (Some(plan), Some(thread), Some(env_id)) = (
+            self.ready_plan(),
+            self.selected.clone(),
+            self.env().map(|e| e.cred.environment_id.clone()),
+        ) else {
+            return;
+        };
+        let mut commands = Vec::new();
         if self.plan_mode() {
-            session.dispatch(thread_command(
+            commands.push(thread_command(
                 "thread.interaction-mode.set",
                 &thread,
                 json!({ "interactionMode": "default" }),
@@ -88,22 +123,24 @@ impl App {
         );
         let mut cmd = protocol::message_dispatch(&thread, &text, self.model.as_ref(), mode);
         protocol::with_plan(&mut cmd, &thread, &plan.id);
-        session.dispatch(cmd);
+        commands.push(cmd);
+        self.dispatch_in_order(env_id, commands, None);
         self.composer = focused("");
         let _ = tx;
     }
 
-    /// Implements the ready plan in a fresh thread in the same project, leaving this one as is.
+    /// Implements the ready plan in a new thread that works where this one does (its branch and
+    /// worktree), linked to the plan with `sourcePlanRef`, as the web's
+    /// `useImplementPlanInNewThread` does: `thread.create`, then the plan as its first message.
     pub fn implement_plan_in_new_thread(&mut self, tx: &mut Tx) {
-        let (Some(plan), Some(session)) = (self.ready_plan(), self.session()) else {
-            return;
-        };
-        let Some(project) = self
-            .selected
-            .as_deref()
-            .and_then(|id| self.shell().thread(id))
-            .map(|t| t.project_id.clone())
-        else {
+        let (Some(plan), Some(source), Some(env_id)) = (
+            self.ready_plan(),
+            self.selected
+                .as_deref()
+                .and_then(|id| self.shell().thread(id))
+                .cloned(),
+            self.env().map(|e| e.cred.environment_id.clone()),
+        ) else {
             return;
         };
         let Some(model) = self.effective_model() else {
@@ -113,18 +150,42 @@ impl App {
         let runtime = self
             .config()
             .map_or("full-access".to_owned(), |c| c.default_runtime_mode());
-        let text = format!("{PLAN_PROMPT_PREFIX}{}", plan.markdown.trim());
-        let mut input = protocol::launch_thread(&project, &text, &model, &runtime);
-        input["title"] = match &plan.title {
+        let title: String = match &plan.title {
             Some(t) => format!("Implement {t}"),
             None => "Implement plan".into(),
         }
         .chars()
         .take(80)
-        .collect::<String>()
-        .into();
-        input["generateTitle"] = false.into();
-        session.launch(input);
+        .collect();
+        let id = protocol::new_id();
+        let create = json!({
+            "type": "thread.create",
+            "commandId": protocol::new_id(),
+            "createdBy": "user",
+            "creationSource": protocol::CREATION_SOURCE,
+            "threadId": id,
+            "projectId": source.project_id,
+            "title": title,
+            "modelSelection": model,
+            "runtimeMode": runtime,
+            "interactionMode": "default",
+            "branch": source.branch,
+            "worktreePath": source.worktree_path,
+        });
+        let text = format!("{PLAN_PROMPT_PREFIX}{}", plan.markdown.trim());
+        let mut send =
+            protocol::message_dispatch(&id, &text, Some(&model), protocol::DispatchMode::Auto);
+        protocol::with_plan(&mut send, &source.id, &plan.id);
+        let (open_env, open_id) = (env_id.clone(), id.clone());
+        self.dispatch_in_order(
+            env_id,
+            vec![create, send],
+            Some(Box::new(move |s: &mut App, _| {
+                if let Some(env) = s.env_index(&open_env) {
+                    s.open_thread_in(env, open_id);
+                }
+            })),
+        );
     }
 }
 

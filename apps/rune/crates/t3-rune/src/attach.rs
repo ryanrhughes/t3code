@@ -10,8 +10,8 @@ use t3_client::attachments::{
 use crate::theme::Look;
 use crate::{App, HANDLE};
 
-/// `PROVIDER_SEND_TURN_MAX_FILE_BYTES` is the server's; this keeps reads off huge files.
-const MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
+/// `PROVIDER_SEND_TURN_MAX_FILE_BYTES`: no server takes a bigger file into a turn.
+const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub struct Attachment {
     pub key: u64,
@@ -47,6 +47,20 @@ impl Attachment {
 }
 
 impl App {
+    /// The largest file this machine takes: what it advertises (`fileAttachments`), within the
+    /// contract's limit (`clampFileAttachmentUploadBytes`).
+    fn max_file_bytes(&self) -> u64 {
+        self.config()
+            .and_then(|c| {
+                c.environment
+                    .capabilities
+                    .get("fileAttachments")?
+                    .get("maxUploadBytes")?
+                    .as_u64()
+            })
+            .map_or(MAX_FILE_BYTES, |n| n.min(MAX_FILE_BYTES))
+    }
+
     /// Adds files from a drop or the picker; images go up as images, the rest as files.
     pub fn attach_paths(&mut self, paths: &[std::path::PathBuf], tx: &mut Tx) {
         for path in paths {
@@ -58,7 +72,7 @@ impl App {
                 continue;
             }
             match std::fs::metadata(path) {
-                Ok(m) if m.len() > MAX_FILE_BYTES => {
+                Ok(m) if m.len() > self.max_file_bytes() => {
                     self.toast(format!("{name} is too large to attach"), tx);
                     continue;
                 }
