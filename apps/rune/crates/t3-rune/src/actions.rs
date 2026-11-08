@@ -438,3 +438,56 @@ mod tests {
         );
     }
 }
+
+impl App {
+    /// The Settled shelf's "Show more": the next page of older settled threads from every
+    /// machine that has more (`orchestration.getOlderSettledThreads`).
+    pub fn load_older_settled(&mut self) {
+        let Some(handle) = crate::HANDLE.get().cloned() else {
+            return;
+        };
+        for env in &mut self.envs {
+            let (Some(cursor), Some(session)) = (env.shell.older_cursor(), env.session.clone())
+            else {
+                continue;
+            };
+            let Some(older) = env.shell.older.as_mut().filter(|o| !o.loading) else {
+                continue;
+            };
+            older.loading = true;
+            let (env_id, before) = (env.cred.environment_id.clone(), older.before.clone());
+            let handle = handle.clone();
+            let input = json!({ "before": cursor, "limit": t3_client::store::OLDER_SETTLED_PAGE });
+            session.call(
+                "orchestration.getOlderSettledThreads",
+                input,
+                move |result| {
+                    handle.update(move |s: &mut App, tx| {
+                        let Some(i) = s.env_index(&env_id) else {
+                            return;
+                        };
+                        match result {
+                            Ok(v) => {
+                                let threads = v["threads"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|t| {
+                                        serde_json::from_value::<ThreadShell>(t.clone()).ok()
+                                    })
+                                    .collect();
+                                s.envs[i].shell.add_older_page(&before, threads);
+                            }
+                            Err(e) => {
+                                if let Some(o) = s.envs[i].shell.older.as_mut() {
+                                    o.loading = false;
+                                }
+                                s.toast(format!("Couldn't load older threads: {e}"), tx);
+                            }
+                        }
+                    });
+                },
+            );
+        }
+    }
+}

@@ -326,6 +326,8 @@ enum Entry {
         status: Option<Status3>,
         age: String,
     },
+    /// "Show more" under the Settled shelf, while servers hold older settled threads.
+    More { loading: bool, remaining: u64 },
     /// A shelf's header: Pinned above the projects, Snoozed and Settled under them.
     Shelf {
         shelf: Shelf,
@@ -474,7 +476,28 @@ fn entries(s: &App) -> Vec<Entry> {
         });
         shelf_rows(&mut out, snoozed, expanded);
     }
-    if !settled.is_empty() {
+    // The count: settled rows above each machine's cut, plus what each server left out.
+    let count: u64 = settled
+        .iter()
+        .filter(|(env, t)| !s.envs[*env].shell.is_below_cut(t))
+        .count() as u64
+        + s.envs
+            .iter()
+            .filter_map(|e| e.shell.older.as_ref())
+            .map(|o| o.total)
+            .sum::<u64>();
+    // Older rows show only above the deepest point a machine with more to load has reached,
+    // so the merged list stays in order while pages arrive (`olderSettledThreads.ts`).
+    let frontier = s.envs.iter().filter_map(|e| e.shell.older_frontier()).max();
+    for (env, e) in s.envs.iter().enumerate() {
+        for t in e.shell.older_rows() {
+            let at = t.settled_at.as_deref().and_then(t3_client::shelves::iso_ms);
+            if frontier.is_none_or(|f| at.is_some_and(|at| at >= f)) {
+                settled.push((env, t));
+            }
+        }
+    }
+    if count > 0 || !settled.is_empty() {
         let at = |t: &t3_client::protocol::ThreadShell| {
             t.settled_at.clone().unwrap_or_else(|| t.updated_at.clone())
         };
@@ -482,10 +505,22 @@ fn entries(s: &App) -> Vec<Entry> {
         let expanded = s.prefs.settled_expanded;
         out.push(Entry::Shelf {
             shelf: Shelf::Settled,
-            count: settled.len(),
+            count: count.max(settled.len() as u64) as usize,
             expanded: Some(expanded),
         });
+        let shown = settled.len() as u64;
         shelf_rows(&mut out, settled, expanded);
+        let loading = s
+            .envs
+            .iter()
+            .any(|e| e.shell.older.as_ref().is_some_and(|o| o.loading));
+        let more = s.envs.iter().any(|e| e.shell.older_cursor().is_some());
+        if expanded && more {
+            out.push(Entry::More {
+                loading,
+                remaining: count.saturating_sub(shown),
+            });
+        }
     }
     out
 }
@@ -606,6 +641,7 @@ fn sidebar(s: &App, look: &Look, layer: &mut Vec<El>) -> El {
             move |_: &App, i| match &key_rows[i] {
                 Entry::Project { env, id, .. } => Cow::Owned(format!("p:{env}:{id}")),
                 Entry::Thread { env, id, .. } => Cow::Owned(format!("t:{env}:{id}")),
+                Entry::More { .. } => Cow::Borrowed("shelf:settled:more"),
                 Entry::Shelf { shelf, .. } => Cow::Borrowed(match shelf {
                     Shelf::Pinned => "shelf:pinned",
                     Shelf::Snoozed => "shelf:snoozed",
@@ -646,6 +682,15 @@ fn entry_row(e: &Entry, selected: Option<&(usize, String)>, k: &Kit) -> El {
                 )
                 .build(k)
         }
+        Entry::More { loading, remaining } => SidebarRow::new(if *loading {
+            "Loading…".to_owned()
+        } else {
+            format!("Show more ({remaining})")
+        })
+        .height(32.0)
+        .depth(1)
+        .on_select(|s: &mut App, _| s.load_older_settled())
+        .build(k),
         Entry::Shelf {
             shelf,
             count,

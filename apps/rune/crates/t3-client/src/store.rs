@@ -11,9 +11,98 @@ pub struct ShellState {
     pub sequence: u64,
     pub loaded: bool,
     pub synchronized: bool,
+    /// Settled threads the snapshot left out (`omitOlderSettled`), and the pages read so far.
+    pub older: Option<OlderSettled>,
 }
 
+/// Older settled threads below the snapshot's cut, read a page at a time with
+/// `orchestration.getOlderSettledThreads` (`olderSettledThreads.ts` on the web).
+#[derive(Clone, Debug, Default)]
+pub struct OlderSettled {
+    /// The cut: settled before this and not kept for another reason.
+    pub before: String,
+    /// How many the server left out, across projects.
+    pub total: u64,
+    /// Pages read so far, newest settle first.
+    pub loaded: Vec<ThreadShell>,
+    pub exhausted: bool,
+    pub loading: bool,
+}
+
+/// Older settled pages hold at most this many.
+pub const OLDER_SETTLED_PAGE: usize = 50;
+
 impl ShellState {
+    pub fn is_below_cut(&self, t: &ThreadShell) -> bool {
+        let Some(o) = &self.older else { return false };
+        let cut = crate::shelves::iso_ms(&o.before);
+        t.is_settled()
+            && t.settled_at
+                .as_deref()
+                .and_then(crate::shelves::iso_ms)
+                .zip(cut)
+                .is_some_and(|(at, cut)| at < cut)
+    }
+
+    /// The Settled count, as the web's: local settled rows above the cut, plus the server's
+    /// count of the ones it left out.
+    pub fn settled_count(&self) -> u64 {
+        let local = self
+            .settled_threads()
+            .iter()
+            .filter(|t| !self.is_below_cut(t))
+            .count() as u64;
+        local + self.older.as_ref().map_or(0, |o| o.total)
+    }
+
+    /// Loaded older rows the live shell doesn't hold itself.
+    pub fn older_rows(&self) -> Vec<&ThreadShell> {
+        let Some(o) = &self.older else {
+            return Vec::new();
+        };
+        o.loaded
+            .iter()
+            .filter(|t| !self.threads.iter().any(|l| l.id == t.id))
+            .collect()
+    }
+
+    /// Where the next page starts: the cut, then just after the last row read.
+    pub fn older_cursor(&self) -> Option<serde_json::Value> {
+        let o = self.older.as_ref().filter(|o| !o.exhausted)?;
+        Some(match o.loaded.last() {
+            None => serde_json::json!({ "settledAt": o.before }),
+            Some(t) => serde_json::json!({
+                "settledAt": t.settled_at.clone().unwrap_or_else(|| o.before.clone()),
+                "threadId": t.id,
+            }),
+        })
+    }
+
+    /// While more pages remain, rows settled before this aren't known yet; a merged list shows
+    /// other machines' older rows only above it.
+    pub fn older_frontier(&self) -> Option<i64> {
+        let o = self.older.as_ref().filter(|o| !o.exhausted)?;
+        let at = o
+            .loaded
+            .last()
+            .and_then(|t| t.settled_at.clone())
+            .unwrap_or_else(|| o.before.clone());
+        crate::shelves::iso_ms(&at)
+    }
+
+    pub fn add_older_page(&mut self, before: &str, threads: Vec<ThreadShell>) {
+        let Some(o) = self.older.as_mut().filter(|o| o.before == before) else {
+            return;
+        };
+        o.loading = false;
+        o.exhausted = threads.len() < OLDER_SETTLED_PAGE;
+        for t in threads {
+            if !o.loaded.iter().any(|l| l.id == t.id) {
+                o.loaded.push(t);
+            }
+        }
+    }
+
     /// Returns true when visible state changed.
     pub fn apply(&mut self, item: ShellStreamItem) -> bool {
         match item {
@@ -35,6 +124,15 @@ impl ShellState {
                 self.sequence = snapshot.snapshot_sequence;
                 self.projects = snapshot.projects;
                 self.threads = snapshot.threads;
+                self.older = snapshot.older_settled.map(|o| {
+                    let total = o.counts.iter().map(|c| c.count).sum();
+                    OlderSettled {
+                        before: o.before,
+                        total,
+                        exhausted: total == 0,
+                        ..Default::default()
+                    }
+                });
                 self.loaded = true;
                 true
             }
@@ -531,6 +629,7 @@ mod tests {
             snapshot: ShellSnapshot {
                 snapshot_sequence: 4,
                 threads: vec![t],
+                older_settled: None,
                 projects: vec![],
             },
             resolved_repository_identity_roots: None,
@@ -540,6 +639,7 @@ mod tests {
             snapshot: ShellSnapshot {
                 snapshot_sequence: 4,
                 threads: vec![],
+                older_settled: None,
                 projects: vec![],
             },
             resolved_repository_identity_roots: Some(vec!["/repo".into()]),
@@ -559,6 +659,7 @@ mod tests {
             snapshot: ShellSnapshot {
                 snapshot_sequence: 10,
                 threads: vec![t("a")],
+                older_settled: None,
                 projects: vec![],
             },
             resolved_repository_identity_roots: None,
@@ -649,5 +750,64 @@ mod tests {
         assert!(!s.queue_held() && s.can_send_now());
         s.runs[3].queue_held = Some(true);
         assert!(s.queue_held());
+    }
+
+    #[test]
+    fn older_settled_threads_page_in_below_the_cut() {
+        let settled = |id: &str, at: &str| ThreadShell {
+            id: id.into(),
+            project_id: "p".into(),
+            settled_override: Some("settled".into()),
+            settled_at: Some(at.into()),
+            ..Default::default()
+        };
+        let mut s = ShellState::default();
+        s.apply(ShellStreamItem::Snapshot {
+            snapshot: ShellSnapshot {
+                snapshot_sequence: 1,
+                // One kept above the cut, one kept below it (pinned, say).
+                threads: vec![
+                    settled("new", "2026-11-07T10:00:00Z"),
+                    settled("kept", "2026-11-01T00:00:00Z"),
+                ],
+                projects: vec![],
+                older_settled: Some(OlderSettledSnapshot {
+                    before: "2026-11-05T00:00:00Z".into(),
+                    counts: vec![OlderSettledCount {
+                        project_id: "p".into(),
+                        count: 60,
+                    }],
+                }),
+            },
+            resolved_repository_identity_roots: None,
+        });
+        // The kept row below the cut is among the server's 60, so it isn't counted twice.
+        assert_eq!(s.settled_count(), 61);
+        assert_eq!(
+            s.older_cursor(),
+            Some(serde_json::json!({ "settledAt": "2026-11-05T00:00:00Z" }))
+        );
+        let page: Vec<_> = (0..OLDER_SETTLED_PAGE)
+            .map(|i| {
+                settled(
+                    &format!("o{i:02}"),
+                    &format!("2026-11-04T00:{:02}:00Z", 59 - i),
+                )
+            })
+            .chain(std::iter::once(settled("kept", "2026-11-01T00:00:00Z")))
+            .collect();
+        s.add_older_page("2026-11-05T00:00:00Z", page);
+        // A page of 51 rows: more may follow, after the last row read.
+        assert_eq!(
+            s.older_cursor(),
+            Some(serde_json::json!({ "settledAt": "2026-11-01T00:00:00Z", "threadId": "kept" }))
+        );
+        // The live shell's own row wins over its paged copy.
+        assert_eq!(s.older_rows().len(), OLDER_SETTLED_PAGE);
+        s.add_older_page(
+            "2026-11-05T00:00:00Z",
+            vec![settled("last", "2026-10-01T00:00:00Z")],
+        );
+        assert_eq!((s.older_cursor(), s.older_frontier()), (None, None));
     }
 }

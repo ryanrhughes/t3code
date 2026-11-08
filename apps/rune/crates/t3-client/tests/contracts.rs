@@ -143,6 +143,14 @@ fn every_subscription_payload_matches_the_contract() {
         "subscribeShell",
         json!({ "requestCompletionMarker": true }),
     );
+    decodes::<c::OrchestrationSubscribeShellPayload>(
+        "subscribeShell (leaving rows out)",
+        json!({ "requestCompletionMarker": true, "omitIdleSubagents": true, "omitOlderSettled": true }),
+    );
+    decodes::<c::OrchestrationGetOlderSettledThreadsPayload>(
+        "getOlderSettledThreads",
+        json!({ "before": { "settledAt": "2026-11-05T00:00:00.000Z", "threadId": "t1" }, "limit": 50 }),
+    );
     decodes::<c::OrchestrationSubscribeThreadPayload>(
         "subscribeThread",
         json!({ "threadId": "t1", "requestCompletionMarker": true }),

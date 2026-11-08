@@ -144,6 +144,12 @@ pub struct ServerConfig {
     pub providers: Vec<ServerProvider>,
     /// `ServerSettings` is large; read the few keys the client needs through accessors.
     pub settings: Value,
+    /// The shell can leave idle subagent children out (`omitIdleSubagents`).
+    #[serde(default)]
+    pub shell_thread_families: bool,
+    /// The shell can leave older settled threads out (`omitOlderSettled`).
+    #[serde(default)]
+    pub shell_older_settled: bool,
 }
 
 impl ServerConfig {
@@ -387,6 +393,23 @@ pub struct ShellSnapshot {
     pub snapshot_sequence: u64,
     pub threads: Vec<ThreadShell>,
     pub projects: Vec<ProjectShell>,
+    /// With `omitOlderSettled`: where the snapshot cut settled threads, and how many it left out.
+    #[serde(default)]
+    pub older_settled: Option<OlderSettledSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OlderSettledSnapshot {
+    pub before: String,
+    pub counts: Vec<OlderSettledCount>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OlderSettledCount {
+    pub project_id: String,
+    pub count: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -239,11 +239,21 @@ async fn connected(
         m = config.recv() => m,
         reason = &mut ended => return Ok(Exit::Lost(reason)),
     };
+    // What the shell may leave out, by what the server advertises.
+    let mut shell_input = json!({ "requestCompletionMarker": true });
     match first {
         Some(StreamMsg::Chunk(values)) => {
             for v in values {
                 if let Ok(ev) = serde_json::from_value::<ServerConfigEvent>(v) {
                     if let ServerConfigEvent::Snapshot { config } = &ev {
+                        // Idle subagent children aren't in the sidebar, and older settled threads
+                        // page in from the Settled shelf, so neither needs to be in the snapshot.
+                        if config.shell_thread_families {
+                            shell_input["omitIdleSubagents"] = true.into();
+                            if config.shell_older_settled {
+                                shell_input["omitOlderSettled"] = true.into();
+                            }
+                        }
                         if config.environment.environment_id != cred.environment_id {
                             anyhow::bail!(
                                 "This server is a different environment than the one you paired with"
@@ -260,10 +270,7 @@ async fn connected(
     sink(ClientEvent::Status(Status::Connected));
 
     // Without `afterSequence` the server sends a full snapshot; reconnects resync the same way.
-    let (_, mut shell) = rpc.stream(
-        "orchestration.subscribeShell",
-        json!({ "requestCompletionMarker": true }),
-    );
+    let (_, mut shell) = rpc.stream("orchestration.subscribeShell", shell_input);
     let mut thread = watched.clone().map(|id| subscribe_thread(&rpc, id));
     let mut live: std::collections::HashMap<u64, tokio::sync::oneshot::Sender<()>> = subs
         .iter()
