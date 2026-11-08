@@ -16,16 +16,20 @@ use t3_client::protocol::{self, thread_command};
 use crate::theme::Look;
 use crate::{App, HANDLE, Popup};
 
-/// The open thread's repository: which one, what it looks like, and what's running on it.
+/// The open thread's repository: which one and what it looks like.
 pub struct Git {
     pub env_id: String,
     pub cwd: String,
+    /// The session the status subscription runs on; a re-pair replaces it.
+    generation: u64,
     stream: StatusStream,
     pub status: Option<VcsStatus>,
-    pub running: Option<Running>,
 }
 
+/// An action running on a checkout, kept apart from `Git` so leaving the thread and coming
+/// back still finds it busy. Only the action that set it clears it.
 pub struct Running {
+    id: String,
     pub label: String,
     /// The newest line a hook printed.
     pub output: Option<String>,
@@ -57,12 +61,14 @@ impl App {
     /// Follows the open thread's checkout with a status subscription, swapping it when the
     /// thread (or the machine) changes.
     pub fn sync_git(&mut self) {
-        let want = self
-            .selected
+        let want = self.selected.as_ref().and(self.workspace_cwd()).zip(
+            self.env()
+                .map(|e| (e.cred.environment_id.clone(), e.generation)),
+        );
+        let have = self
+            .git
             .as_ref()
-            .and(self.workspace_cwd())
-            .zip(self.env().map(|e| e.cred.environment_id.clone()));
-        let have = self.git.as_ref().map(|g| (g.cwd.clone(), g.env_id.clone()));
+            .map(|g| (g.cwd.clone(), (g.env_id.clone(), g.generation)));
         if want == have {
             return;
         }
@@ -75,7 +81,7 @@ impl App {
         }
         self.commit_dialog = None;
         self.git_confirm = None;
-        let (Some((cwd, env_id)), Some(session), Some(handle)) =
+        let (Some((cwd, (env_id, generation))), Some(session), Some(handle)) =
             (want, self.session(), HANDLE.get().cloned())
         else {
             return;
@@ -88,7 +94,11 @@ impl App {
             move |frame| {
                 let (e, c) = (e.clone(), c.clone());
                 handle.update(move |s: &mut App, _| {
-                    let Some(g) = s.git.as_mut().filter(|g| (&g.env_id, &g.cwd) == (&e, &c)) else {
+                    let Some(g) = s
+                        .git
+                        .as_mut()
+                        .filter(|g| (&g.env_id, &g.cwd, g.generation) == (&e, &c, generation))
+                    else {
                         return;
                     };
                     if let Some(Ok(event)) = frame {
@@ -102,9 +112,9 @@ impl App {
         self.git = Some(Git {
             env_id,
             cwd,
+            generation,
             stream: StatusStream::default(),
             status: None,
-            running: None,
         });
     }
 
@@ -120,8 +130,28 @@ impl App {
         self.git.as_ref()?.status.as_ref().filter(|s| s.is_repo)
     }
 
+    fn git_key(&self) -> Option<(String, String)> {
+        let g = self.git.as_ref()?;
+        Some((g.env_id.clone(), g.cwd.clone()))
+    }
+
+    fn git_running(&self) -> Option<&Running> {
+        self.git_running.get(&self.git_key()?)
+    }
+
     fn git_busy(&self) -> bool {
-        self.git.as_ref().is_some_and(|g| g.running.is_some())
+        self.git_running().is_some()
+    }
+
+    /// The running action on `key`, if it's still the one with `id`.
+    fn running_mut(&mut self, key: &(String, String), id: &str) -> Option<&mut Running> {
+        self.git_running.get_mut(key).filter(|r| r.id == id)
+    }
+
+    fn end_running(&mut self, key: &(String, String), id: &str) {
+        if self.running_mut(key, id).is_some() {
+            self.git_running.remove(key);
+        }
     }
 
     /// The header button: runs its action, asking first on the default branch.
@@ -217,11 +247,12 @@ impl App {
         let (Some(session), Some(handle)) = (self.session(), HANDLE.get().cloned()) else {
             return;
         };
-        let Some(g) = self.git.as_mut() else {
+        let (Some(key), Some(thread)) = (self.git_key(), self.selected.clone()) else {
             return;
         };
+        let id = protocol::new_id();
         let mut input =
-            json!({ "actionId": protocol::new_id(), "cwd": g.cwd, "action": run.action });
+            json!({ "actionId": id, "cwd": key.1, "action": run.action, "threadId": thread });
         if let Some(m) = &run.message {
             input["commitMessage"] = json!(m);
         }
@@ -231,78 +262,65 @@ impl App {
         if run.feature_branch {
             input["featureBranch"] = json!(true);
         }
-        if let Some(thread) = &self.selected {
-            input["threadId"] = json!(thread);
-        }
-        g.running = Some(Running {
-            label: "Starting…".into(),
-            output: None,
-            phase: None,
-        });
-        let (env, cwd) = (g.env_id.clone(), g.cwd.clone());
-        let thread = self.selected.clone();
+        self.git_running.insert(
+            key.clone(),
+            Running {
+                id: id.clone(),
+                label: "Starting…".into(),
+                output: None,
+                phase: None,
+            },
+        );
         session.stream("git.runStackedAction", input, move |frame| {
-            let (env, cwd, thread) = (env.clone(), cwd.clone(), thread.clone());
-            handle.update(move |s: &mut App, tx| s.on_git_progress(&env, &cwd, thread, frame, tx));
+            let (key, id, thread) = (key.clone(), id.clone(), thread.clone());
+            handle.update(move |s: &mut App, tx| s.on_git_progress(&key, &id, &thread, frame, tx));
         });
     }
 
+    /// One frame of an action's stream. It stays busy until the stream ends: the server still
+    /// refreshes status after `action_finished`.
     fn on_git_progress(
         &mut self,
-        env: &str,
-        cwd: &str,
-        thread: Option<String>,
+        key: &(String, String),
+        id: &str,
+        thread: &str,
         frame: Option<Result<Value, String>>,
         tx: &mut Tx,
     ) {
-        // The thread may have changed since; the toast still says how it went.
-        let mine = self
-            .git
-            .as_mut()
-            .filter(|g| (g.env_id.as_str(), g.cwd.as_str()) == (env, cwd));
         let ev = match frame {
             Some(Ok(ev)) => ev,
             Some(Err(e)) => {
-                if let Some(g) = mine {
-                    g.running = None;
-                }
+                self.end_running(key, id);
                 return self.toast(format!("Git action failed: {e}"), tx);
             }
-            None => {
-                if let Some(g) = mine {
-                    g.running = None;
-                }
-                return;
-            }
+            None => return self.end_running(key, id),
         };
         let str_of = |k: &str| ev[k].as_str().map(str::to_owned);
         match ev["kind"].as_str().unwrap_or("") {
             "phase_started" => {
-                if let Some(r) = mine.and_then(|g| g.running.as_mut()) {
+                if let Some(r) = self.running_mut(key, id) {
                     r.phase = str_of("label");
                     r.label = r.phase.clone().unwrap_or_default();
                 }
             }
             "hook_started" => {
-                if let Some(r) = mine.and_then(|g| g.running.as_mut()) {
+                if let Some(r) = self.running_mut(key, id) {
                     r.label = format!("Running {}…", str_of("hookName").unwrap_or_default());
                 }
             }
             "hook_output" => {
-                if let Some(r) = mine.and_then(|g| g.running.as_mut()) {
+                if let Some(r) = self.running_mut(key, id) {
                     r.output = str_of("text").and_then(|t| t.lines().last().map(str::to_owned));
                 }
             }
             "hook_finished" => {
-                if let Some(r) = mine.and_then(|g| g.running.as_mut()) {
+                if let Some(r) = self.running_mut(key, id) {
                     r.label = r.phase.clone().unwrap_or_default();
                     r.output = None;
                 }
             }
             "action_failed" => {
-                if let Some(g) = mine {
-                    g.running = None;
-                }
+                self.end_running(key, id);
                 self.toast(
                     format!(
                         "Git action failed: {}",
@@ -312,22 +330,21 @@ impl App {
                 );
             }
             "action_finished" => {
-                if let Some(g) = mine {
-                    g.running = None;
+                if let Some(r) = self.running_mut(key, id) {
+                    r.label = "Finishing…".into();
+                    r.output = None;
                 }
                 let r = &ev["result"];
                 // A new feature branch: the thread follows it, as the web's metadata patch.
-                if let (Some(branch), Some(thread)) = (
-                    (r["branch"]["status"] == "created")
-                        .then(|| r["branch"]["name"].as_str())
-                        .flatten(),
-                    thread,
-                ) {
-                    if let Some(i) = self.env_index(env) {
+                if let Some(branch) = (r["branch"]["status"] == "created")
+                    .then(|| r["branch"]["name"].as_str())
+                    .flatten()
+                {
+                    if let Some(i) = self.env_index(&key.0) {
                         if let Some(session) = &self.envs[i].session {
                             session.dispatch(thread_command(
                                 "thread.metadata.update",
-                                &thread,
+                                thread,
                                 json!({ "branch": branch }),
                             ));
                         }
@@ -359,24 +376,22 @@ impl App {
         let (Some(session), Some(handle)) = (self.session(), HANDLE.get().cloned()) else {
             return;
         };
-        let Some(g) = self.git.as_mut().filter(|g| g.running.is_none()) else {
+        let Some(key) = self.git_key().filter(|_| !self.git_busy()) else {
             return;
         };
-        g.running = Some(Running {
-            label: "Pulling latest changes…".into(),
-            output: None,
-            phase: None,
-        });
-        let (env, cwd) = (g.env_id.clone(), g.cwd.clone());
-        session.call("vcs.pull", json!({ "cwd": cwd }), move |result| {
+        let id = protocol::new_id();
+        self.git_running.insert(
+            key.clone(),
+            Running {
+                id: id.clone(),
+                label: "Pulling latest changes…".into(),
+                output: None,
+                phase: None,
+            },
+        );
+        session.call("vcs.pull", json!({ "cwd": key.1 }), move |result| {
             handle.update(move |s: &mut App, tx| {
-                if let Some(g) = s
-                    .git
-                    .as_mut()
-                    .filter(|g| (&g.env_id, &g.cwd) == (&env, &cwd))
-                {
-                    g.running = None;
-                }
+                s.end_running(&key, &id);
                 match result {
                     Ok(v) if v["status"] == "skipped_up_to_date" => {
                         s.toast("Already up to date", tx)
@@ -410,7 +425,7 @@ pub fn control(s: &App, look: &Look, layer: &mut Vec<El>) -> Option<El> {
         status.is_default_ref,
         status.has_primary_remote,
     );
-    let running = s.git.as_ref().and_then(|g| g.running.as_ref());
+    let running = s.git_running();
     let label = running.map_or(q.label.clone(), |r| r.label.clone());
     let mut quick = Button::new(label)
         .variant(ButtonVariant::Ghost)

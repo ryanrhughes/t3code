@@ -43,6 +43,11 @@ NodeModule.registerHooks({
 });
 
 const logic = await import(`${webSrc}/components/GitActionsControl.logic.ts`);
+const { applyGitStatusStreamEvent } = await import("@t3tools/shared/git");
+
+type MenuItem = { id: string; label: string; disabled: boolean; dialogAction?: string };
+// What the item runs is part of the row, so a Push that commits would fail the replay.
+const menuRow = (m: MenuItem) => [m.id, m.label, m.disabled, m.dialogAction ?? null];
 
 const statuses: Array<Record<string, unknown>> = [];
 for (const provider of ["github", "gitlab", null, "sourcehut"])
@@ -81,13 +86,7 @@ for (const [index, status] of statuses.entries())
         // The menu doesn't depend on the default ref; once per status is enough.
         menu: isDefaultRef
           ? null
-          : logic
-              .buildMenuItems(status, false, hasPrimaryRemote)
-              .map((m: { id: string; label: string; disabled: boolean }) => [
-                m.id,
-                m.label,
-                m.disabled,
-              ]),
+          : logic.buildMenuItems(status, false, hasPrimaryRemote).map(menuRow),
       });
     }
 // Busy disables everything, whatever the branch looks like.
@@ -99,9 +98,7 @@ cases.push({
   isDefaultRef: false,
   hasPrimaryRemote: true,
   quick: [q.label, q.disabled, q.kind, q.action ?? q.hint ?? null],
-  menu: logic
-    .buildMenuItems(busy, true, true)
-    .map((m: { id: string; label: string; disabled: boolean }) => [m.id, m.label, m.disabled]),
+  menu: logic.buildMenuItems(busy, true, true).map(menuRow),
 });
 
 const confirm = ["commit", "push", "create_pr", "commit_push", "commit_push_pr"].flatMap((a) =>
@@ -121,5 +118,34 @@ for (const c of cases) {
   if (c.menu !== null) c.menu = intern(c.menu);
 }
 
-NodeFS.writeFileSync(out, `${JSON.stringify({ statuses, results, cases, confirm })}\n`);
+// The status stream's halves, folded by the web's own reducer after each event.
+const local = (refName: string, dirty: boolean) => ({
+  isRepo: true,
+  hasPrimaryRemote: true,
+  isDefaultRef: false,
+  refName,
+  hasWorkingTreeChanges: dirty,
+  workingTree: { files: [], insertions: dirty ? 3 : 0, deletions: 0 },
+});
+const remote = {
+  hasUpstream: true,
+  aheadCount: 2,
+  behindCount: 1,
+  pr: { number: 7, title: "t", url: "u", baseRef: "main", headRef: "feature", state: "open" },
+};
+const events = [
+  { _tag: "remoteUpdated", remote },
+  { _tag: "localUpdated", local: local("feature", true) },
+  { _tag: "snapshot", local: local("main", false), remote: null },
+  { _tag: "remoteUpdated", remote },
+  { _tag: "localUpdated", local: local("main", true) },
+  { _tag: "remoteUpdated", remote: null },
+];
+let current = null;
+const stream = events.map((event) => {
+  current = applyGitStatusStreamEvent(current, event);
+  return { event, merged: current };
+});
+
+NodeFS.writeFileSync(out, `${JSON.stringify({ statuses, results, cases, confirm, stream })}\n`);
 console.log(`wrote ${cases.length} cases to ${NodePath.relative(repoRoot, out)}`);

@@ -96,7 +96,9 @@ impl StatusStream {
         self.status()
     }
 
-    fn status(&self) -> Option<VcsStatus> {
+    /// Both halves as one object, as `mergeGitStatusParts`: the remote over the local, or no
+    /// upstream while the remote is unknown.
+    pub fn merged(&self) -> Option<Value> {
         let mut merged = self.local.clone()?;
         let remote = match &self.remote {
             Some(r) if r.is_object() => r.clone(),
@@ -108,7 +110,11 @@ impl StatusStream {
         if let (Some(m), Some(r)) = (merged.as_object_mut(), remote.as_object()) {
             m.extend(r.clone());
         }
-        serde_json::from_value(merged).ok()
+        Some(merged)
+    }
+
+    fn status(&self) -> Option<VcsStatus> {
+        serde_json::from_value(self.merged()?).ok()
     }
 }
 

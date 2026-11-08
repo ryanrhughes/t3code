@@ -38,7 +38,7 @@ fn git_actions_match_the_web() {
         if !case["menu"].is_null() {
             let got: Value = menu_items(Some(status), busy, remote)
                 .iter()
-                .map(|m| json!([m.id, m.label, m.disabled]))
+                .map(|m| json!([m.id, m.label, m.disabled, m.action]))
                 .collect();
             if got != *result("menu") {
                 failures.push(format!("menu {case}: rust {got}"));
@@ -66,33 +66,10 @@ fn git_actions_match_the_web() {
 
 #[test]
 fn status_halves_merge_like_the_web() {
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/git-actions.json")).unwrap();
     let mut stream = StatusStream::default();
-    let local = json!({
-        "isRepo": true, "hasPrimaryRemote": true, "isDefaultRef": false, "refName": "feature",
-        "hasWorkingTreeChanges": true,
-        "workingTree": { "files": [], "insertions": 3, "deletions": 1 },
-    });
-    // A local-only snapshot reads as no upstream, as `EMPTY_GIT_STATUS_REMOTE`.
-    let s = stream
-        .apply(&json!({ "_tag": "snapshot", "local": local, "remote": null }))
-        .unwrap();
-    assert!(!s.has_upstream && s.pr.is_none() && s.has_working_tree_changes);
-    let remote = json!({
-        "hasUpstream": true, "aheadCount": 2, "behindCount": 0,
-        "pr": { "number": 7, "title": "t", "url": "u", "baseRef": "main", "headRef": "feature", "state": "open" },
-    });
-    let s = stream
-        .apply(&json!({ "_tag": "remoteUpdated", "remote": remote }))
-        .unwrap();
-    assert_eq!((s.ref_name.as_deref(), s.ahead_count), (Some("feature"), 2));
-    // A local update keeps what the remote said.
-    let clean = json!({
-        "isRepo": true, "hasPrimaryRemote": true, "isDefaultRef": false, "refName": "feature",
-        "hasWorkingTreeChanges": false,
-        "workingTree": { "files": [], "insertions": 0, "deletions": 0 },
-    });
-    let s = stream
-        .apply(&json!({ "_tag": "localUpdated", "local": clean }))
-        .unwrap();
-    assert!(!s.has_working_tree_changes && s.pr.unwrap().number == 7);
+    for (i, step) in fixture["stream"].as_array().unwrap().iter().enumerate() {
+        assert!(stream.apply(&step["event"]).is_some(), "step {i} decodes");
+        assert_eq!(stream.merged().as_ref(), Some(&step["merged"]), "step {i}");
+    }
 }

@@ -202,6 +202,8 @@ pub struct App {
     pub draft_base: Option<(String, String, String)>,
     pub refs: Option<workspace::Refs>,
     pub git: Option<git::Git>,
+    /// Running git actions by (machine, checkout).
+    pub git_running: std::collections::HashMap<(String, String), git::Running>,
     pub commit_dialog: Option<git::CommitDialog>,
     /// An action on the default branch, waiting on the user's go-ahead.
     pub git_confirm: Option<git::GitRun>,
@@ -411,6 +413,7 @@ impl App {
             draft_base: None,
             refs: None,
             git: None,
+            git_running: Default::default(),
             commit_dialog: None,
             git_confirm: None,
             editing_queued: None,

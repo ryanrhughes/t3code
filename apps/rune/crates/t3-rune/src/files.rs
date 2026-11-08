@@ -200,17 +200,20 @@ impl FilesPanel {
 impl App {
     /// The workspace the Files tab browses: the open thread's worktree, else its project's root.
     pub fn workspace_cwd(&self) -> Option<String> {
-        if let Some(path) = self
-            .thread
-            .as_ref()
-            .and_then(|t| t.thread.worktree_path.clone())
-        {
-            return Some(path);
-        }
-        let project = self
+        // The sidebar row knows the worktree before the thread's detail loads; until it does,
+        // the project root would be the wrong checkout.
+        let shell = self
             .selected
             .as_deref()
-            .and_then(|id| self.shell().thread(id))
+            .and_then(|id| self.shell().thread(id));
+        if let Some(path) = shell.and_then(|t| t.worktree_path.clone()).or_else(|| {
+            self.thread
+                .as_ref()
+                .and_then(|t| t.thread.worktree_path.clone())
+        }) {
+            return Some(path);
+        }
+        let project = shell
             .map(|t| t.project_id.clone())
             .or(self.draft_project.clone())?;
         Some(self.shell().project(&project)?.workspace_root.clone())
